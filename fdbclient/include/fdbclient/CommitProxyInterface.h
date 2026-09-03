@@ -29,6 +29,7 @@
 #include "fdbclient/CommitTransaction.h"
 #include "fdbclient/CDCProxyInterface.h"
 #include "fdbclient/FDBTypes.h"
+#include "fdbclient/GetEncryptCipherKeys.h"
 #include "fdbclient/GlobalConfig.h"
 #include "fdbclient/GrvProxyInterface.h"
 #include "fdbclient/IdempotencyId.h"

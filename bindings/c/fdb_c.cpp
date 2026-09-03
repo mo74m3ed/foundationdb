@@ -19,6 +19,7 @@
  */
 
 #include "fdbclient/FDBTypes.h"
+#include "fdbclient/BlobGranuleApiImpl.h"
 #include "flow/ProtocolVersion.h"
 #include <cstdint>
 #define FDB_USE_LATEST_API_VERSION
@@ -30,6 +31,7 @@
 #include "fdbclient/NativeCdcClient.h"
 #include "foundationdb/fdb_c.h"
 #include "foundationdb/fdb_c_internal.h"
+#include "foundationdb/fdb_c_requests.h"
 
 int g_api_version = 0;
 
@@ -196,16 +198,16 @@ extern "C" DLLEXPORT fdb_bool_t fdb_error_predicate(int predicate_test, fdb_erro
 		return ((FDBFuture*)(ThreadFuture<return_type>(unknown_error())).extractPtr());                                \
 	}
 
-#define RETURN_RESULT_ON_ERROR(return_type, code_to_run)                                                               \
+#define RETURN_RESULT_ON_ERROR(code_to_run)                                                                            \
 	try {                                                                                                              \
 		code_to_run                                                                                                    \
 	} catch (Error & e) {                                                                                              \
 		if (e.code() <= 0)                                                                                             \
-			return ((FDBResult*)(ThreadResult<return_type>(internal_error())).extractPtr());                           \
+			return createErrorResult(internal_error());                                                                \
 		else                                                                                                           \
-			return ((FDBResult*)(ThreadResult<return_type>(e)).extractPtr());                                          \
+			return createErrorResult(e);                                                                               \
 	} catch (...) {                                                                                                    \
-		return ((FDBResult*)(ThreadResult<return_type>(unknown_error())).extractPtr());                                \
+		return createErrorResult(unknown_error());                                                                     \
 	}
 
 #define RETURN_ON_ERROR(code_to_run)                                                                                   \
@@ -234,6 +236,59 @@ extern "C" DLLEXPORT fdb_bool_t fdb_error_predicate(int predicate_test, fdb_erro
 		fprintf(stderr, "Unexpected FDB unknown error\n");                                                             \
 		abort();                                                                                                       \
 	}
+
+/* ------------------------------------------------------------------------------------------------------
+ * Convenience wrappers for the internal C API
+ */
+
+namespace {
+
+template <class RequestType>
+RequestType* createApiRequest(FDBTransaction* tr, int32_t request_type) {
+	FDBAllocatorIfc* allocIfc = ((ITransaction*)tr)->getAllocatorInterface();
+	void* alloc = nullptr;
+	RequestType* request = reinterpret_cast<RequestType*>(allocIfc->allocate(&alloc, sizeof(RequestType)));
+	request->header = reinterpret_cast<FDBRequestHeader*>(allocIfc->allocate(&alloc, sizeof(FDBRequestHeader)));
+	request->header->allocator.handle = alloc;
+	request->header->allocator.ifc = allocIfc;
+	request->header->request_type = request_type;
+	return request;
+}
+
+template <class RequestType>
+FDBFuture* executeApiRequest(FDBTransaction* tr, RequestType* request) {
+	return (FDBFuture*)((ITransaction*)tr)->execAsyncRequest(ApiRequest::addRef((FDBRequest*)request)).extractPtr();
+}
+
+template <class RequestType>
+void* copyBytesIntoApiRequest(RequestType* request, const void* begin, uint64_t length) {
+	FDBRequestHeader* header = request->header;
+	void* out = header->allocator.ifc->allocate(&header->allocator.handle, length);
+	memcpy(out, begin, length);
+	return out;
+}
+
+template <class RequestType>
+void releaseApiRequest(RequestType* request) {
+	FDBRequestHeader* header = request->header;
+	header->allocator.ifc->delref(header->allocator.handle);
+}
+
+template <class ResultType>
+fdb_error_t getResultData(FDBResult* in, ResultType** out) noexcept {
+	if (in->header->result_type == FDBApiResult_Error) {
+		return ((FDBErrorResult*)in)->error;
+	} else {
+		*out = (ResultType*)in;
+		return error_code_success;
+	}
+}
+
+FDBResult* createErrorResult(Error e) {
+	return TypedApiResult<FDBErrorResult>::createError(e).extractPtr();
+}
+
+} // namespace
 
 extern "C" DLLEXPORT fdb_error_t fdb_network_set_option(FDBNetworkOption option,
                                                         uint8_t const* value,
@@ -449,16 +504,21 @@ extern "C" DLLEXPORT fdb_error_t fdb_future_get_cdc_versioned_mutations(FDBFutur
 }
 
 extern "C" DLLEXPORT void fdb_result_destroy(FDBResult* r) {
-	CATCH_AND_DIE(TSAVB(r)->cancel(););
+	CATCH_AND_DIE(ApiResult::release(r););
 }
 
 fdb_error_t fdb_result_get_keyvalue_array(FDBResult* r,
                                           FDBKeyValue const** out_kv,
                                           int* out_count,
                                           fdb_bool_t* out_more) {
-	CATCH_AND_RETURN(RangeResult rr = TSAV(RangeResult, r)->get(); *out_kv = (FDBKeyValue*)rr.begin();
-	                 *out_count = rr.size();
-	                 *out_more = rr.more;);
+	FDBReadRangeResult* data;
+	fdb_error_t err = getResultData(r, &data);
+	if (!err) {
+		*out_kv = data->kv_arr;
+		*out_count = data->kv_count;
+		*out_more = data->more;
+	}
+	return err;
 }
 
 FDBFuture* fdb_create_cluster_v609(const char* cluster_file_path) {
@@ -1074,13 +1134,13 @@ extern "C" DLLEXPORT fdb_error_t fdb_select_api_version_impl(int runtime_version
 	Error::init();
 
 	// Versioned API changes -- descending order by version (new changes at top)
-	// FDB_API_CHANGED( function, ver ) means there is a new implementation as of ver, and a function function_(ver-1)
-	// is the old implementation. FDB_API_REMOVED( function, ver ) means the function was removed as of ver, and
-	// function_(ver-1) is the old implementation
+	// FDB_API_CHANGED( function, ver ) means there is a new implementation as of ver, and a function
+	// function_(ver-1) is the old implementation. FDB_API_REMOVED( function, ver ) means the function was removed
+	// as of ver, and function_(ver-1) is the old implementation
 	//
 	// WARNING: use caution when implementing removed functions by calling public API functions. This can lead to
-	// undesired behavior when using the multi-version API. Instead, it is better to have both the removed and public
-	// functions call an internal implementation function. See fdb_create_database_impl for an example.
+	// undesired behavior when using the multi-version API. Instead, it is better to have both the removed and
+	// public functions call an internal implementation function. See fdb_create_database_impl for an example.
 	FDB_API_REMOVED(fdb_future_get_version, 620);
 	FDB_API_REMOVED(fdb_create_cluster, 610);
 	FDB_API_REMOVED(fdb_cluster_create_database, 610);
@@ -1112,6 +1172,22 @@ extern "C" DLLEXPORT const char* fdb_get_client_version() {
 
 extern "C" DLLEXPORT void fdb_use_future_protocol_version() {
 	API->useFutureProtocolVersion();
+}
+
+/* -------------------------------------------------------------------------------------------
+ *  Internal evolvable API
+ */
+
+extern "C" DLLEXPORT FDBAllocatorIfc* fdb_get_allocator_interface() {
+	return API->getAllocatorInterface();
+}
+
+extern "C" DLLEXPORT FDBFuture* fdb_transaction_exec_async(FDBTransaction* tx, FDBRequest* request) {
+	return (FDBFuture*)((TXN(tx))->execAsyncRequest(ApiRequest::addRef(request)).extractPtr());
+}
+
+extern "C" DLLEXPORT fdb_error_t fdb_future_get_result(FDBFuture* f, FDBResult** result) {
+	CATCH_AND_RETURN(*result = (TSAV(ApiResult, f))->get().extractPtr(););
 }
 
 #if defined(__APPLE__)

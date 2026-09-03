@@ -12,7 +12,7 @@ from .fdb_version import CURRENT_VERSION, FUTURE_VERSION
 from .test_util import random_alphanum_string
 
 SUPPORTED_PLATFORMS = ["x86_64", "aarch64"]
-FDB_DOWNLOAD_ROOT = "https://github.com/apple/foundationdb/releases/download/"
+FDB_DOWNLOAD_ROOT = "s3://sfc-eng-jenkins/foundationdb/release/builds/"
 LOCAL_OLD_BINARY_REPO = "/opt/foundationdb/old/"
 MAX_DOWNLOAD_ATTEMPTS = 5
 
@@ -20,18 +20,6 @@ MAX_DOWNLOAD_ATTEMPTS = 5
 def make_executable_path(path):
     st = os.stat(path)
     os.chmod(path, st.st_mode | stat.S_IEXEC)
-
-
-def compute_sha256(filename):
-    hash_function = hashlib.sha256()
-    with open(filename, "rb") as f:
-        while True:
-            data = f.read(128 * 1024)
-            if not data:
-                break
-            hash_function.update(data)
-
-    return hash_function.hexdigest()
 
 
 def read_to_str(filename):
@@ -56,6 +44,11 @@ class FdbBinaryDownloader:
         self.local_binary_repo = Path(LOCAL_OLD_BINARY_REPO)
         if not self.local_binary_repo.exists():
             self.local_binary_repo = None
+        self.old_binaries_available = self.check_s3_release_repo_availability()
+
+    def check_s3_release_repo_availability(self):
+        retcode = os.system("aws s3 ls {}".format(FDB_DOWNLOAD_ROOT))
+        return retcode == 0
 
     # Check if the binaries for the given version are available in the local old binaries repository
     def version_in_local_repo(self, version):
@@ -97,9 +90,10 @@ class FdbBinaryDownloader:
             "{}.{}".format(str(local_file), random_alphanum_string(8))
         )
         self.download_dir.joinpath(version).mkdir(parents=True, exist_ok=True)
-        remote_file = "{}{}/{}".format(FDB_DOWNLOAD_ROOT, version, remote_bin_name)
-        remote_sha256 = "{}.sha256".format(remote_file)
-        local_sha256 = Path("{}.sha256".format(local_file_tmp))
+        relpath = "bin" if make_executable else "lib"
+        remote_file = "{}{}/snowflake-{}/{}/{}".format(
+            FDB_DOWNLOAD_ROOT, self.platform, version, relpath, remote_bin_name
+        )
 
         for attempt_cnt in range(MAX_DOWNLOAD_ATTEMPTS + 1):
             if attempt_cnt == MAX_DOWNLOAD_ATTEMPTS:
@@ -130,7 +124,6 @@ class FdbBinaryDownloader:
             )
 
         os.rename(local_file_tmp, local_file)
-        os.remove(local_sha256)
 
         if make_executable:
             make_executable_path(local_file)

@@ -114,6 +114,7 @@ struct GetServerDBInfoRequest {
 // Instantiated in worker.cpp
 extern template class RequestStream<GetServerDBInfoRequest, false>;
 extern template struct NetNotifiedQueue<GetServerDBInfoRequest, false>;
+extern template class GetEncryptCipherKeys<ServerDBInfo>;
 
 Future<Void> broadcastTxnRequest(TxnStateRequest req, int sendAmount, bool sendReply);
 

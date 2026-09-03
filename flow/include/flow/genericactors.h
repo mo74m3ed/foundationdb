@@ -1769,6 +1769,15 @@ Future<Void> checkUntil(double checkInterval, Func f, TaskPriority taskID = Task
 	}
 }
 
+ACTOR template <class Func>
+Future<Void> checkUntil(double checkInterval, Func f, TaskPriority taskID = TaskPriority::DefaultDelay) {
+	loop {
+		wait(delay(checkInterval, taskID));
+		if (f())
+			return Void();
+	}
+}
+
 // Invoke actorFunc() forever in a loop
 // At least wait<interval> between two actor functor invocations
 template <class F>

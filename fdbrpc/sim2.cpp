@@ -111,6 +111,29 @@ bool simulator_should_inject_fault(const char* context, const char* file, int li
 	return false;
 }
 
+bool simulator_should_inject_blob_fault(const char* context, const char* file, int line, int error_code) {
+	if (!g_network->isSimulated() || !faultInjectionActivated)
+		return false;
+
+	auto p = g_simulator->getCurrentProcess();
+
+	if (!g_simulator->speedUpSimulation && deterministicRandom()->random01() < p->blob_inject_failure_rate) {
+		CODE_PROBE(true, "A blob fault was injected", probe::assert::simOnly, probe::context::sim2);
+		CODE_PROBE(error_code == error_code_http_request_failed,
+		           "A failed http request was injected",
+		           probe::assert::simOnly,
+		           probe::context::sim2);
+		TraceEvent("BlobFaultInjected")
+		    .detail("Context", context)
+		    .detail("File", file)
+		    .detail("Line", line)
+		    .detail("ErrorCode", error_code);
+		return true;
+	}
+
+	return false;
+}
+
 void ISimulator::disableFor(const std::string& desc, double time) {
 	disabledMap[desc] = time;
 }
@@ -1865,6 +1888,10 @@ public:
 					    .detail("VictimProcess", process->toString());
 				}
 			}
+		}
+
+		if (!forceKill && !allowRebootAndDelete && kt == KillType::RebootAndDelete) {
+			kt = KillType::Reboot;
 		}
 
 		CODE_PROBE(originalKt != kt,

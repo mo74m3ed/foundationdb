@@ -26,6 +26,7 @@
 #include "fdbclient/IClientApi.h"
 #include "fdbclient/Knobs.h"
 #include "fdbclient/StatusClient.h"
+#include "fdbclient/BlobRestoreCommon.h"
 
 #include "flow/Arena.h"
 #include "flow/FastRef.h"
@@ -464,6 +465,9 @@ void printStatus(StatusObjectReader statusObj,
 				} else {
 					outputString += "unknown";
 				}
+
+				outputString +=
+				    "\n  Log engine             - " + (statusObjConfig.get("log_engine", strVal) ? strVal : "unknown");
 
 				outputString +=
 				    "\n  Log engine             - " + (statusObjConfig.get("log_engine", strVal) ? strVal : "unknown");

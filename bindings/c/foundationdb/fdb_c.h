@@ -41,16 +41,6 @@
 #error Requested API version requires a newer version of this header
 #endif
 
-#if FDB_API_VERSION >= 23 && !defined(WARN_UNUSED_RESULT)
-#ifdef __GNUG__
-#define WARN_UNUSED_RESULT __attribute__((warn_unused_result))
-#else
-#define WARN_UNUSED_RESULT
-#endif
-#else
-#define WARN_UNUSED_RESULT
-#endif
-
 /*
  * With default settings, gcc will not warn about unprototyped functions being
  * called, so it is easy to erroneously call a function which is not available
@@ -65,6 +55,10 @@
 
 #include "fdb_c_options.g.h"
 #include "fdb_c_types.h"
+
+typedef FDBBGEncryptionCtxV1 FDBBGEncryptionCtx;
+typedef FDBBGFilePointerV1 FDBBGFilePointer;
+typedef FDBBGFileDescriptionV1 FDBBGFileDescription;
 
 #ifdef __cplusplus
 extern "C" {
@@ -101,29 +95,6 @@ DLLEXPORT WARN_UNUSED_RESULT fdb_error_t fdb_stop_network(void);
 
 DLLEXPORT WARN_UNUSED_RESULT fdb_error_t fdb_add_network_thread_completion_hook(void (*hook)(void*),
                                                                                 void* hook_parameter);
-
-#pragma pack(push, 4)
-typedef struct key {
-	const uint8_t* key;
-	int key_length;
-} FDBKey;
-#if FDB_API_VERSION >= 630
-typedef struct keyvalue {
-	const uint8_t* key;
-	int key_length;
-	const uint8_t* value;
-	int value_length;
-} FDBKeyValue;
-#else
-typedef struct keyvalue {
-	const void* key;
-	int key_length;
-	const void* value;
-	int value_length;
-} FDBKeyValue;
-#endif
-
-#pragma pack(pop)
 
 /* Memory layout of KeySelectorRef. */
 typedef struct keyselector {
@@ -654,6 +625,14 @@ DLLEXPORT WARN_UNUSED_RESULT FDBFuture* fdb_transaction_get_range_split_points_w
                                                                                           int end_key_name_length,
                                                                                           int64_t chunk_size,
                                                                                           int limit);
+
+DLLEXPORT WARN_UNUSED_RESULT FDBFuture* fdb_transaction_read_blob_granules_description_v2(FDBTransaction* tr,
+                                                                                          uint8_t const* begin_key_name,
+                                                                                          int begin_key_name_length,
+                                                                                          uint8_t const* end_key_name,
+                                                                                          int end_key_name_length,
+                                                                                          int64_t begin_version,
+                                                                                          int64_t read_version);
 
 #define FDB_KEYSEL_LAST_LESS_THAN(k, l) k, l, 0, 0
 #define FDB_KEYSEL_LAST_LESS_OR_EQUAL(k, l) k, l, 1, 0

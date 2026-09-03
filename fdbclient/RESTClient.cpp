@@ -155,6 +155,12 @@ Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<RESTClient> c
 			// received the "Connection: close" header.
 			if (r->data.headers["Connection"] != "close") {
 				client->conectionPool->returnConnection(connectPoolKey, rconn, client->knobs.connection_pool_size);
+			} else {
+				// connection not returned to the connection-pool
+				if (FLOW_KNOBS->REST_LOG_LEVEL >= RESTLogSeverity::DEBUG) {
+					TraceEvent("RESTConnClosePeerClosed").detail("Host", url.host).detail("Service", url.service);
+				}
+				rconn.conn->close();
 			}
 			rconn.conn.clear();
 		} catch (Error& e) {
@@ -171,6 +177,8 @@ Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<RESTClient> c
 			}
 			err = e;
 		}
+
+		ASSERT(!rconn.conn.isValid());
 
 		// If err is not present then r is valid.
 		// If r->code is in successCodes then record the successful request and return r.
@@ -208,10 +216,12 @@ Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<RESTClient> c
 
 		event.detail("ConnectionEstablished", connectionEstablished);
 
-		if (remoteAddress.present())
+		if (remoteAddress.present()) {
 			event.detail("RemoteEndpoint", remoteAddress.get());
-		else
-			event.detail("RemoteHost", url.host);
+		} else {
+			std::string remoteAddress = url.host + ":" + url.service;
+			event.detail("RemoteAdress", remoteAddress);
+		}
 
 		event.detail("Verb", verb).detail("Resource", url.resource).detail("ThisTry", thisTry);
 

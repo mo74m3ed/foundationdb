@@ -5,6 +5,7 @@
 // Instantiate ClientDBInfo related templates
 template class ReplyPromise<struct ClientDBInfo>;
 template class ReplyPromise<CachedSerialization<ClientDBInfo>>;
+template class GetEncryptCipherKeys<ClientDBInfo>;
 
 // Instantiate OpenDatabaseCoordRequest related templates
 template struct NetNotifiedQueue<OpenDatabaseCoordRequest, true>;

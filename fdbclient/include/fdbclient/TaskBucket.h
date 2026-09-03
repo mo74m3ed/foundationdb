@@ -30,7 +30,7 @@
 #include "fdbclient/NativeAPI.h"
 #include "fdbclient/RunRYWTransaction.h"
 #include "fdbclient/Subspace.h"
-#include "fdbclient/KeyBackedTypes.h"
+#include "fdbclient/KeyBackedTypes.actor.h"
 
 class FutureBucket;
 class TaskFuture;

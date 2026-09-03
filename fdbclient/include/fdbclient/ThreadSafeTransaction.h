@@ -195,6 +195,7 @@ public:
 	Reference<IDatabase> createDatabaseFromConnectionString(const char* connectionString) override;
 
 	void addNetworkThreadCompletionHook(void (*hook)(void*), void* hookParameter) override;
+	FDBAllocatorIfc* getAllocatorInterface() override;
 
 private:
 	friend IClientApi* getLocalClientAPI();

@@ -282,6 +282,9 @@ struct FdbCApi : public ThreadSafeReferenceCounted<FdbCApi> {
 	                                           int endKeyNameLength,
 	                                           FDBConflictRangeType);
 
+	FDBFuture* (*transactionExecAsync)(FDBTransaction* tr, FDBRequest* request);
+	FDBAllocatorIfc* (*getAllocatorInterface)();
+
 	// Future
 	fdb_error_t (*futureGetDatabase)(FDBFuture* f, FDBDatabase** outDb);
 	fdb_error_t (*futureGetInt64)(FDBFuture* f, int64_t* outValue);
@@ -309,6 +312,7 @@ struct FdbCApi : public ThreadSafeReferenceCounted<FdbCApi> {
 	                                                    int64_t* outLastConsumedVersion);
 
 	fdb_error_t (*futureGetSharedState)(FDBFuture* f, DatabaseSharedState** outPtr);
+	fdb_error_t (*futureGetResult)(FDBFuture* f, FDBResult** response);
 	fdb_error_t (*futureSetCallback)(FDBFuture* f, FDBCallback callback, void* callback_parameter);
 	void (*futureCancel)(FDBFuture* f);
 	void (*futureDestroy)(FDBFuture* f);
@@ -398,6 +402,10 @@ public:
 	void addref() override { ThreadSafeReferenceCounted<DLTransaction>::addref(); }
 	void delref() override { ThreadSafeReferenceCounted<DLTransaction>::delref(); }
 
+	ThreadFuture<ApiResult> execAsyncRequest(ApiRequest request) override;
+
+	FDBAllocatorIfc* getAllocatorInterface() override;
+
 private:
 	const Reference<FdbCApi> api;
 	FdbCApi::FDBTransaction* const tr;
@@ -473,6 +481,8 @@ public:
 	Reference<IDatabase> createDatabaseFromConnectionString(const char* connectionString) override;
 
 	void addNetworkThreadCompletionHook(void (*hook)(void*), void* hookParameter) override;
+
+	FDBAllocatorIfc* getAllocatorInterface() override;
 
 private:
 	const std::string fdbCPath;
@@ -608,12 +618,6 @@ private:
 	// Creates a ThreadFuture<T> that will signal an error if the transaction times out.
 	template <class T>
 	ThreadFuture<T> makeTimeout();
-
-	template <class T>
-	ThreadResult<T> abortableTimeoutResult(ThreadFuture<Void> abortSignal);
-
-	template <class T>
-	ThreadResult<T> abortableResult(ThreadResult<T> result, ThreadFuture<Void> abortSignal);
 
 	TransactionInfo transaction;
 
@@ -857,6 +861,8 @@ public:
 	Reference<IDatabase> createDatabase(ClusterConnectionRecord const& connectionRecord);
 	Reference<IDatabase> createDatabase(const char* clusterFilePath) override;
 	Reference<IDatabase> createDatabaseFromConnectionString(const char* connectionString) override;
+
+	FDBAllocatorIfc* getAllocatorInterface() override;
 
 	static MultiVersionApi* api;
 

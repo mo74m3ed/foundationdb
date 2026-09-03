@@ -23,6 +23,7 @@
 #include "flow/ScopeExit.h"
 #include "flow/SimpleCounter.h"
 #include "flow/UnitTest.h"
+#include "flow/ScopeExit.h"
 
 #include "flow/config.h"
 

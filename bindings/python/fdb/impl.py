@@ -1732,6 +1732,16 @@ def init_c_api():
     _capi.fdb_tenant_get_id.argtypes = [ctypes.c_void_p]
     _capi.fdb_tenant_get_id.restype = ctypes.c_void_p
 
+    _capi.fdb_tenant_list_blobbified_ranges.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_int,
+    ]
+    _capi.fdb_tenant_list_blobbified_ranges.restype = ctypes.c_void_p
+
     _capi.fdb_tenant_create_transaction.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_void_p),

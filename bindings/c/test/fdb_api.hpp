@@ -89,7 +89,9 @@ namespace fdb {
 // hide C API to discourage mixing C/C++ API
 namespace native {
 #include <foundationdb/fdb_c.h>
-}
+#include <foundationdb/fdb_c_internal.h>
+#include <foundationdb/fdb_c_requests.h>
+} // namespace native
 
 using ByteString = std::basic_string<uint8_t>;
 using BytesRef = std::basic_string_view<uint8_t>;
@@ -99,10 +101,21 @@ using KeyRef = BytesRef;
 using Value = ByteString;
 using ValueRef = BytesRef;
 
+struct KeyRangeRef : native::FDBKeyRange {
+	KeyRef beginKey() const noexcept { return KeyRef(native::FDBKeyRange::begin_key, begin_key_length); }
+	KeyRef endKey() const noexcept { return KeyRef(native::FDBKeyRange::end_key, end_key_length); }
+};
+
+struct KeyValueRef : native::FDBKeyValue {
+	KeyRef key() const noexcept { return KeyRef(native::FDBKeyValue::key, key_length); }
+	ValueRef value() const noexcept { return ValueRef(native::FDBKeyValue::value, value_length); }
+};
+
 struct KeyValue {
 	Key key;
 	Value value;
 };
+
 struct KeyRange {
 	Key beginKey;
 	Key endKey;
@@ -186,6 +199,101 @@ private:
 	CodeType err;
 };
 
+[[noreturn]] inline void throwError(std::string_view preamble, Error err) {
+	auto msg = std::string(preamble);
+	msg.append(err.what());
+	throw std::runtime_error(msg);
+}
+
+template <class DataT, class WrapperT>
+class Result {
+public:
+	using DataType = DataT;
+	using WrapperType = WrapperT;
+	Result(DataType* r) {
+		if (r) {
+			resRef = std::shared_ptr<DataType>(r, destroy);
+		}
+	}
+	Result() noexcept : Result(nullptr) {}
+	Result(const Result&) noexcept = default;
+	Result(Result&&) noexcept = default;
+	Result& operator=(const Result&) noexcept = default;
+	Result& operator=(Result&&) noexcept = default;
+
+	bool valid() const noexcept { return resRef != nullptr; }
+
+	explicit operator bool() const noexcept { return valid(); }
+
+	DataType* data() const {
+		assert(valid());
+		return resRef.get();
+	}
+
+	native::FDBResult* getPtr() const { return (native::FDBResult*)resRef.get(); }
+
+	static WrapperType create(DataType* r) {
+		WrapperType res;
+		((Result<DataType, WrapperType>&)res) = Result<DataType, WrapperType>(r);
+		return res;
+	}
+
+private:
+	std::shared_ptr<DataType> resRef;
+	static void destroy(DataType* res) { fdb_result_destroy((native::FDBResult*)res); }
+};
+
+class ReadBlobGranulesDescriptionResult
+  : public Result<native::FDBReadBGDescriptionResult, ReadBlobGranulesDescriptionResult> {
+public:
+	VectorRef<GranuleDescriptionRef*> descs() const noexcept {
+		return VectorRef<GranuleDescriptionRef*>((GranuleDescriptionRef**)data()->desc_arr, data()->desc_count);
+	}
+};
+
+using ReadBlobGranulesDescriptionResultV1 = VectorRef<GranuleDescriptionRefV1>;
+
+class ReadRangeResult : public Result<native::FDBReadRangeResult, ReadRangeResult> {
+public:
+	using KeyValueRefArray = std::tuple<KeyValueRef const*, int, bool>;
+
+	[[nodiscard]] Error getKeyValueArrayNothrow(KeyValueRefArray& out) const noexcept {
+		auto out_more_native = native::fdb_bool_t{};
+		auto& [out_kv, out_count, out_more] = out;
+		auto err_raw = native::fdb_result_get_keyvalue_array(
+		    getPtr(), reinterpret_cast<const native::FDBKeyValue**>(&out_kv), &out_count, &out_more_native);
+		out_more = out_more_native != 0;
+		return Error(err_raw);
+	}
+
+	KeyValueRefArray getKeyValueArray() const {
+		auto ret = KeyValueRefArray{};
+		if (auto err = getKeyValueArrayNothrow(ret))
+			throwError("ERROR: result_get_keyvalue_array(): ", err);
+		return ret;
+	}
+};
+
+class ReadBGMutationsResult : public Result<native::FDBReadBGMutationsResult, ReadBGMutationsResult> {
+public:
+	[[nodiscard]] Error getGranuleMutationArrayNothrow(VectorRef<GranuleMutationRef>& out) const noexcept {
+		const native::FDBBGMutation* out_mutations = nullptr;
+		int out_count = 0;
+		auto err_raw = native::fdb_result_get_bg_mutations_array(getPtr(), &out_mutations, &out_count);
+		if (!err_raw) {
+			out = VectorRef<GranuleMutationRef>((GranuleMutationRef*)out_mutations, out_count);
+		}
+		return Error(err_raw);
+	}
+
+	VectorRef<GranuleMutationRef> getGranuleMutationArray() const {
+		VectorRef<GranuleMutationRef> ret;
+		if (auto err = getGranuleMutationArrayNothrow(ret))
+			throwError("ERROR: result_get_keyvalue_array(): ", err);
+		return ret;
+	}
+};
+
 /* Traits of value types held by ready futures.
    Holds type and value extraction function. */
 namespace future_var {
@@ -234,10 +342,7 @@ struct StringArray {
 		return Error(native::fdb_future_get_string_array(f, &out_strings, &out_count));
 	}
 };
-struct KeyValueRef : native::FDBKeyValue {
-	fdb::KeyRef key() const noexcept { return fdb::KeyRef(native::FDBKeyValue::key, key_length); }
-	fdb::ValueRef value() const noexcept { return fdb::ValueRef(native::FDBKeyValue::value, value_length); }
-};
+
 struct KeyValueRefArray {
 	using Type = std::tuple<KeyValueRef const*, int, bool>;
 	static Error extract(native::FDBFuture* f, Type& out) noexcept {
@@ -249,10 +354,7 @@ struct KeyValueRefArray {
 		return Error(err);
 	}
 };
-struct KeyRangeRef : native::FDBKeyRange {
-	fdb::KeyRef beginKey() const noexcept { return fdb::KeyRef(native::FDBKeyRange::begin_key, begin_key_length); }
-	fdb::KeyRef endKey() const noexcept { return fdb::KeyRef(native::FDBKeyRange::end_key, end_key_length); }
-};
+
 struct KeyRangeRefArray {
 	using Type = std::tuple<KeyRangeRef const*, int>;
 	static Error extract(native::FDBFuture* f, Type& out) noexcept {
@@ -264,12 +366,6 @@ struct KeyRangeRefArray {
 };
 
 } // namespace future_var
-
-[[noreturn]] inline void throwError(std::string_view preamble, Error err) {
-	auto msg = std::string(preamble);
-	msg.append(err.what());
-	throw std::runtime_error(msg);
-}
 
 inline int maxApiVersion() {
 	return native::fdb_get_max_api_version();

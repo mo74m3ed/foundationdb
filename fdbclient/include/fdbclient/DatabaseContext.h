@@ -40,6 +40,7 @@
 #include "fdbclient/ProxyLoadBalanceMetrics.h"
 #include "fdbclient/SpecialKeySpace.h"
 #include "fdbclient/VersionVector.h"
+#include "fdbclient/IKeyValueStore.actor.h"
 #include "fdbrpc/QueueModel.h"
 #include "fdbrpc/MultiInterface.h"
 #include "flow/TDMetric.h"

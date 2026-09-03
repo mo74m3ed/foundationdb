@@ -51,6 +51,8 @@
 
 FDB_BOOLEAN_PARAM(InitializeTraceMetrics);
 
+FDB_BOOLEAN_PARAM(InitializeTraceMetrics);
+
 inline int fastrand() {
 	static int g_seed = 0;
 	g_seed = 214013 * g_seed + 2531011;

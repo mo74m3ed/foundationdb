@@ -748,6 +748,11 @@ void DLApi::init() {
 	                   fdbCPath,
 	                   "fdb_create_database_from_connection_string",
 	                   headerVersion >= ApiVersion::withCreateDBFromConnString().version());
+	loadClientFunction(&api->getAllocatorInterface,
+	                   lib,
+	                   fdbCPath,
+	                   "fdb_get_allocator_interface",
+	                   headerVersion >= ApiVersion::withEvolvableBlobGranuleApi().version());
 
 	loadClientFunction(
 	    &api->databaseCreateSharedState, lib, fdbCPath, "fdb_database_create_shared_state", headerVersion >= 710);
@@ -931,6 +936,11 @@ void DLApi::init() {
 	                   "fdb_future_get_cdc_versioned_mutations",
 	                   headerVersion >= ApiVersion::withNativeCdcApi().version());
 	loadClientFunction(&api->futureGetSharedState, lib, fdbCPath, "fdb_future_get_shared_state", headerVersion >= 710);
+	loadClientFunction(&api->futureGetResult,
+	                   lib,
+	                   fdbCPath,
+	                   "fdb_future_get_result",
+	                   headerVersion >= ApiVersion::withEvolvableBlobGranuleApi().version());
 	loadClientFunction(&api->futureSetCallback, lib, fdbCPath, "fdb_future_set_callback", headerVersion >= 0);
 	loadClientFunction(&api->futureCancel, lib, fdbCPath, "fdb_future_cancel", headerVersion >= 0);
 	loadClientFunction(&api->futureDestroy, lib, fdbCPath, "fdb_future_destroy", headerVersion >= 0);
@@ -1066,6 +1076,13 @@ Reference<IDatabase> DLApi::createDatabaseFromConnectionString(const char* conne
 void DLApi::addNetworkThreadCompletionHook(void (*hook)(void*), void* hookParameter) {
 	MutexHolder holder(lock);
 	threadCompletionHooks.emplace_back(hook, hookParameter);
+}
+
+FDBAllocatorIfc* DLApi::getAllocatorInterface() {
+	if (!api->getAllocatorInterface) {
+		throw unsupported_operation();
+	}
+	return api->getAllocatorInterface();
 }
 
 // MultiVersionTransaction
@@ -1474,18 +1491,6 @@ ThreadFuture<T> MultiVersionTransaction::makeTimeout() {
 		ASSERT(v.isError());
 		return ErrorOr<T>(v.getError());
 	});
-}
-
-template <class T>
-ThreadResult<T> MultiVersionTransaction::abortableTimeoutResult(ThreadFuture<Void> abortSignal) {
-	// If database initialization failed, return the initialization error
-	auto dbError = db->dbState->getInitializationError();
-	if (dbError.isError()) {
-		return ThreadResult<T>(dbError.getError());
-	}
-	ThreadFuture<T> abortable = abortableFuture(makeTimeout<T>(), abortSignal);
-	abortable.blockUntilReadyCheckOnMainThread();
-	return ThreadResult<T>((ThreadSingleAssignmentVar<T>*)abortable.extractPtr());
 }
 
 void MultiVersionTransaction::reset() {
@@ -2714,6 +2719,10 @@ Reference<IDatabase> MultiVersionApi::createDatabase(const char* clusterFilePath
 
 Reference<IDatabase> MultiVersionApi::createDatabaseFromConnectionString(const char* connectionString) {
 	return createDatabase(ClusterConnectionRecord::fromConnectionString(connectionString));
+}
+
+FDBAllocatorIfc* MultiVersionApi::getAllocatorInterface() {
+	return localClient->api->getAllocatorInterface();
 }
 
 void MultiVersionApi::updateSupportedVersions() {

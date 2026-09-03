@@ -296,6 +296,8 @@ struct TransactionState : ReferenceCounted<TransactionState> {
 
 	void addClearCost();
 
+	void addClearCost();
+
 	Future<Void> startTransaction(uint32_t readVersionFlags = 0);
 	Future<Version> getReadVersion(uint32_t flags);
 };

@@ -26,6 +26,7 @@
 #include "fdbclient/FDBTypes.h"
 #include "fdbclient/NativeCdcClient.h"
 #include "fdbclient/Tracing.h"
+#include "fdbclient/ApiRequest.h"
 #include "flow/ProtocolVersion.h"
 #include "flow/ThreadHelper.h"
 
@@ -196,6 +197,7 @@ public:
 	virtual Reference<IDatabase> createDatabaseFromConnectionString(const char* connectionString) = 0;
 
 	virtual void addNetworkThreadCompletionHook(void (*hook)(void*), void* hookParameter) = 0;
+	virtual FDBAllocatorIfc* getAllocatorInterface() = 0;
 };
 
 #endif

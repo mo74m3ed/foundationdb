@@ -20,16 +20,7 @@
 
 #ifndef FDB_C_INTERNAL_H
 #define FDB_C_INTERNAL_H
-#include "flow/ProtocolVersion.h"
 #pragma once
-
-#ifndef DLLEXPORT
-#define DLLEXPORT
-#endif
-
-#ifndef WARN_UNUSED_RESULT
-#define WARN_UNUSED_RESULT
-#endif
 
 #include "fdb_c_types.h"
 
@@ -51,4 +42,5 @@ DLLEXPORT void fdb_use_future_protocol_version();
 #ifdef __cplusplus
 }
 #endif
+
 #endif

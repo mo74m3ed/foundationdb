@@ -1191,6 +1191,8 @@ Future<Void> fetchShardMetricsList(DataDistributionTracker* self, GetMetricsList
 	    !res.present()) {
 		req.reply.sendError(timed_out());
 	}
+	// Cancel all actors so they aren't waiting on sizeChanged broken promise
+	actors.clear(false);
 }
 
 void triggerStorageQueueRebalance(DataDistributionTracker* self, RebalanceStorageQueueRequest req) {

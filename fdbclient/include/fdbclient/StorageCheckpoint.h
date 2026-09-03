@@ -41,6 +41,12 @@ enum CheckpointFormat {
 
 // Metadata of a FDB checkpoint.
 struct CheckpointMetaData {
+private:
+	// 71.2 field. We should consider remove them when not support 71.2 upgrade/downgrade
+	KeyRange deprecated_range;
+	UID deprecated_sid; // Storage server ID on which this checkpoint is created.
+	int deprecated_gcTime; // Time to delete this checkpoint, a Unix timestamp in seconds.
+public:
 	enum CheckpointState {
 		InvalidState = 0,
 		Pending = 1, // Checkpoint creation pending.
@@ -160,6 +166,11 @@ public:
 
 // A DataMoveMetaData object corresponds to a single data move.
 struct DataMoveMetaData {
+private:
+	// a deprecated field only for downgrade to or upgrade from 71.2 compatible;
+	KeyRange deprecated_range;
+
+public:
 	enum Phase {
 		InvalidPhase = 0,
 		Prepare = 1, // System keyspace is being modified.
@@ -171,6 +182,7 @@ struct DataMoveMetaData {
 	constexpr static FileIdentifier file_identifier = 13804362;
 	UID id; // A unique id for this data move.
 	Version version;
+
 	std::vector<KeyRange> ranges;
 	int priority;
 	std::set<UID> src;

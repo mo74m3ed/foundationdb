@@ -90,6 +90,10 @@ struct TestSpec {
 	using KnobKeyValues = std::vector<std::pair<std::string, std::string>>;
 	KnobKeyValues knobs;
 
+	// Overridden knob values
+	using KnobKeyValues = std::vector<std::pair<std::string, std::string>>;
+	KnobKeyValues knobs;
+
 	// List of workloads with their options
 	std::vector<WorkloadSpec> workloads;
 };

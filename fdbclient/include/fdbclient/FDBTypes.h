@@ -55,6 +55,11 @@ using CoordinatorsHash = uint64_t;
 // the intended target.
 static const KeyRef invalidKey = "\xff\xff\xff\xff\xff\xff\xff\xff"_sr;
 
+// invalidKey is intentionally far beyond the system space.  It is meant to be used as a safe initial value for a key
+// before it is set to something meaningful to avoid mistakes where a default constructed key is written to instead of
+// the intended target.
+static const KeyRef invalidKey = "\xff\xff\xff\xff\xff\xff\xff\xff"_sr;
+
 enum {
 	tagLocalitySpecial = -1, // tag with this locality means it is invalidTag (id=0) or txsTag (id=1)
 	tagLocalityLogRouter = -2,
@@ -1687,6 +1692,9 @@ struct transaction_creator_traits : std::false_type {};
 template <typename T>
     requires requires { typename T::TransactionT; }
 struct transaction_creator_traits<T> : std::true_type {};
+
+template <typename T>
+struct transaction_creator_traits<Reference<T>> : transaction_creator_traits<T> {};
 
 template <typename T>
 struct transaction_creator_traits<Reference<T>> : transaction_creator_traits<T> {};

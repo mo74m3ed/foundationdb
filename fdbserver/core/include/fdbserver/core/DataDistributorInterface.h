@@ -28,6 +28,8 @@
 #include <string>
 #include <unordered_set>
 
+FDB_BOOLEAN_PARAM(IsMocked);
+
 struct DataDistributorInterface {
 	constexpr static FileIdentifier file_identifier = 12383874;
 	RequestStream<ReplyPromise<Void>> waitFailure;

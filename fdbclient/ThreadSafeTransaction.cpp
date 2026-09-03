@@ -776,3 +776,7 @@ void ThreadSafeApi::addNetworkThreadCompletionHook(void (*hook)(void*), void* ho
 	                          // upon return that the hook is set.
 	threadCompletionHooks.emplace_back(hook, hookParameter);
 }
+
+FDBAllocatorIfc* ThreadSafeApi::getAllocatorInterface() {
+	return localAllocatorInterface();
+}

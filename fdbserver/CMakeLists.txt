@@ -195,7 +195,7 @@ if (WITH_ROCKSDB)
     target_link_libraries(fdbserver PRIVATE fdbclient sqlite ${ROCKSDB_LIBRARIES} ${LZ4_LIBRARY})
   endif()
 else()
-  target_link_libraries(fdbserver PRIVATE fdbclient sqlite)
+  target_link_libraries(fdbserver PRIVATE fdbclient metacluster sqlite)
 endif()
 
 if(USE_JEMALLOC)

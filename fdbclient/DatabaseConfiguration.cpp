@@ -294,6 +294,9 @@ bool DatabaseConfiguration::isValid() const {
 	return true;
 }
 
+// The database configuration is what we desired state of the cluster, which may be different from ongoing cluster
+// states. For example, the real count of roles, which is reported in each process, can differ from the desired role
+// count.
 StatusObject DatabaseConfiguration::toJSON(bool noPolicies) const {
 	StatusObject result;
 
@@ -371,30 +374,19 @@ StatusObject DatabaseConfiguration::toJSON(bool noPolicies) const {
 		result["regions"] = getRegionJSON();
 	}
 
+	result["logs"] = getDesiredLogs();
+
+	auto cpCount = getDesiredCommitProxies();
+	result["commit_proxies"] = cpCount;
+
+	auto grvCount = getDesiredGrvProxies();
+	result["grv_proxies"] = grvCount;
+
 	// Add to the `proxies` count for backwards compatibility with tools built before 7.0.
-	int32_t proxyCount = -1;
-	if (desiredTLogCount != -1 || isOverridden("logs")) {
-		result["logs"] = desiredTLogCount;
-	}
-	if (commitProxyCount != -1 || isOverridden("commit_proxies")) {
-		result["commit_proxies"] = commitProxyCount;
-		if (proxyCount != -1) {
-			proxyCount += commitProxyCount;
-		} else {
-			proxyCount = commitProxyCount;
-		}
-	}
-	if (grvProxyCount != -1 || isOverridden("grv_proxies")) {
-		result["grv_proxies"] = grvProxyCount;
-		if (proxyCount != -1) {
-			proxyCount += grvProxyCount;
-		} else {
-			proxyCount = grvProxyCount;
-		}
-	}
-	if (resolverCount != -1 || isOverridden("resolvers")) {
-		result["resolvers"] = resolverCount;
-	}
+	result["proxies"] = cpCount + grvCount;
+
+	result["resolvers"] = getDesiredResolvers();
+
 	if (desiredLogRouterCount != -1 || isOverridden("log_routers")) {
 		result["log_routers"] = desiredLogRouterCount;
 	}
@@ -404,6 +396,8 @@ StatusObject DatabaseConfiguration::toJSON(bool noPolicies) const {
 	if (repopulateRegionAntiQuorum != 0 || isOverridden("repopulate_anti_quorum")) {
 		result["repopulate_anti_quorum"] = repopulateRegionAntiQuorum;
 	}
+
+	// only report the auto values when they're different from default
 	if (autoCommitProxyCount != CLIENT_KNOBS->DEFAULT_AUTO_COMMIT_PROXIES || isOverridden("auto_commit_proxies")) {
 		result["auto_commit_proxies"] = autoCommitProxyCount;
 	}
@@ -415,9 +409,6 @@ StatusObject DatabaseConfiguration::toJSON(bool noPolicies) const {
 	}
 	if (autoDesiredTLogCount != CLIENT_KNOBS->DEFAULT_AUTO_LOGS || isOverridden("auto_logs")) {
 		result["auto_logs"] = autoDesiredTLogCount;
-	}
-	if (proxyCount != -1) {
-		result["proxies"] = proxyCount;
 	}
 
 	result["backup_worker_enabled"] = (int32_t)backupWorkerEnabled;
@@ -473,6 +464,65 @@ std::string DatabaseConfiguration::configureStringFromJSON(const StatusObject& j
 			                                    json_spirit::Output_options::none);
 		} else {
 			throw invalid_option_value();
+		}
+	}
+
+	// The log_engine setting requires some special handling because it was not included in the JSON form of a
+	// DatabaseConfiguration until FDB 7.3.  This means that configuring a new database using a JSON config object from
+	// an older version will now fail because it lacks an explicit log_engine setting.  Previously, the log_engine would
+	// be set indirectly because the "storage_engine=<engine_name>" property from JSON would convert to a standalone
+	// "<engine_name>" command in the output, and each engine name exists as a command which sets both the
+	// log and storage engines, with the log engine normally being ssd-2.
+	// The storage_engine and log_engine JSON properties now explicitly indicate their engine types and map to configure
+	// commands of the same name.  So, to support configuring a new database with an older JSON config without an
+	// explicit log_engine we simply add " log_engine=ssd-2" to the output string if the input JSON did not contain a
+	// log_engine.
+	if (!json.contains("log_engine")) {
+		result += " log_engine=ssd-2";
+	}
+
+	return result;
+}
+
+std::string DatabaseConfiguration::configureStringFromJSON(const StatusObject& json) {
+	std::string result;
+
+	for (auto kv : json) {
+		// These JSON properties are ignored for some reason.  This behavior is being maintained in a refactor
+		// of this code and the old code gave no reasoning.
+		static std::set<std::string> ignore = { "tss_storage_engine", "perpetual_storage_wiggle_locality" };
+		if (ignore.contains(kv.first)) {
+			continue;
+		}
+
+		result += " ";
+		// All integers are assumed to be actual DatabaseConfig keys and are set with
+		// the hidden "<name>:=<intValue>" syntax of the configure command.
+		if (kv.second.type() == json_spirit::int_type) {
+			result += kv.first + ":=" + format("%d", kv.second.get_int());
+		} else if (kv.second.type() == json_spirit::str_type) {
+			// For string values, some properties can set with a "<name>=<value>" syntax in "configure"
+			// Such properites are listed here:
+			static std::set<std::string> directSet = {
+				"storage_migration_type", "tenant_mode", "encryption_at_rest_mode", "storage_engine", "log_engine"
+			};
+
+			if (directSet.contains(kv.first)) {
+				result += kv.first + "=" + kv.second.get_str();
+			} else {
+				// For the rest, it is assumed that the property name is meaningless and the value string
+				// is a standalone 'configure' command which has the identical effect.
+				// TODO:  Fix this terrible legacy behavior which probably isn't compatible with
+				// some of the more recently added configuration and options.
+				result += kv.second.get_str();
+			}
+		} else if (kv.second.type() == json_spirit::array_type) {
+			// Array properties convert to <name>=<json_array>
+			result += kv.first + "=" +
+			          json_spirit::write_string(json_spirit::mValue(kv.second.get_array()),
+			                                    json_spirit::Output_options::none);
+		} else {
+			throw invalid_config_db_key();
 		}
 	}
 
