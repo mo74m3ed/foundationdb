@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,12 +23,12 @@
 #include "fdbclient/Status.h"
 #pragma once
 
-#include "fdbclient/NativeAPI.actor.h"
+#include "fdbclient/NativeAPI.h"
 #include "fdbclient/KeyRangeMap.h"
-#include "fdbclient/RYWIterator.h"
-#include "fdbclient/ISingleThreadTransaction.h"
+#include "flow/FastRef.h"
 #include "flow/WipedString.h"
 #include <list>
+#include <memory>
 
 // SOMEDAY: Optimize getKey to avoid using getRange
 
@@ -47,7 +47,7 @@ struct ReadYourWritesTransactionOptions {
 	int snapshotRywEnabled;
 	bool bypassUnreadable : 1;
 
-	ReadYourWritesTransactionOptions() {}
+	ReadYourWritesTransactionOptions() = default;
 	explicit ReadYourWritesTransactionOptions(Transaction const& tr);
 	void reset(Transaction const& tr);
 	bool getAndResetWriteConflictDisabled();
@@ -67,30 +67,26 @@ struct TransactionDebugInfo : public ReferenceCounted<TransactionDebugInfo> {
 // Snapshot::True and handle read conflicts at ReadYourWritesTransaction, write NativeAPI with AddConflictRange::False
 // and handle write conflicts at ReadYourWritesTransaction, eventually send this information to NativeAPI on commit.
 class ReadYourWritesTransaction final : NonCopyable,
-                                        public ISingleThreadTransaction,
+                                        public ReferenceCounted<ReadYourWritesTransaction>,
                                         public FastAllocated<ReadYourWritesTransaction> {
 public:
-	explicit ReadYourWritesTransaction(Database const& cx,
-	                                   Optional<Reference<Tenant>> const& tenant = Optional<Reference<Tenant>>());
+	explicit ReadYourWritesTransaction(Database const& cx);
 	~ReadYourWritesTransaction();
-
-	void construct(Database const&) override;
-	void construct(Database const&, Reference<Tenant> const& tenant) override;
-	void setVersion(Version v) override { tr.setVersion(v); }
-	Future<Version> getReadVersion() override;
-	Optional<Version> getCachedReadVersion() const override { return tr.getCachedReadVersion(); }
-	Future<Optional<Value>> get(const Key& key, Snapshot = Snapshot::False) override;
-	Future<Key> getKey(const KeySelector& key, Snapshot = Snapshot::False) override;
+	void setVersion(Version v) { tr.setVersion(v); }
+	Future<Version> getReadVersion();
+	Optional<Version> getCachedReadVersion() const { return tr.getCachedReadVersion(); }
+	Future<Optional<Value>> get(const Key& key, Snapshot = Snapshot::False);
+	Future<Key> getKey(const KeySelector& key, Snapshot = Snapshot::False);
 	Future<RangeResult> getRange(const KeySelector& begin,
 	                             const KeySelector& end,
 	                             int limit,
 	                             Snapshot = Snapshot::False,
-	                             Reverse = Reverse::False) override;
+	                             Reverse = Reverse::False);
 	Future<RangeResult> getRange(KeySelector begin,
 	                             KeySelector end,
 	                             GetRangeLimits limits,
 	                             Snapshot = Snapshot::False,
-	                             Reverse = Reverse::False) override;
+	                             Reverse = Reverse::False);
 	Future<RangeResult> getRange(const KeyRange& keys,
 	                             int limit,
 	                             Snapshot snapshot = Snapshot::False,
@@ -115,59 +111,47 @@ public:
 	                                         KeySelector end,
 	                                         Key mapper,
 	                                         GetRangeLimits limits,
-	                                         int matchIndex,
 	                                         Snapshot = Snapshot::False,
-	                                         Reverse = Reverse::False) override;
+	                                         Reverse = Reverse::False);
 
-	[[nodiscard]] Future<Standalone<VectorRef<const char*>>> getAddressesForKey(const Key& key) override;
-	Future<Standalone<VectorRef<KeyRef>>> getRangeSplitPoints(const KeyRange& range, int64_t chunkSize) override;
-	Future<int64_t> getEstimatedRangeSizeBytes(const KeyRange& keys) override;
+	[[nodiscard]] Future<Standalone<VectorRef<const char*>>> getAddressesForKey(const Key& key);
+	Future<Standalone<VectorRef<KeyRef>>> getRangeSplitPoints(const KeyRange& range, int64_t chunkSize, int limit = -1);
+	Future<int64_t> getEstimatedRangeSizeBytes(const KeyRange& keys);
 
-	Future<Standalone<VectorRef<KeyRangeRef>>> getBlobGranuleRanges(const KeyRange& range, int rangeLimit) override;
-	Future<Standalone<VectorRef<BlobGranuleChunkRef>>> readBlobGranules(const KeyRange& range,
-	                                                                    Version begin,
-	                                                                    Optional<Version> readVersion,
-	                                                                    Version* readVersionOut) override;
+	void addReadConflictRange(KeyRangeRef const& keys);
+	void makeSelfConflicting() { tr.makeSelfConflicting(); }
 
-	Future<Standalone<VectorRef<BlobGranuleSummaryRef>>> summarizeBlobGranules(const KeyRange& range,
-	                                                                           Optional<Version> summaryVersion,
-	                                                                           int rangeLimit) override;
-	void addGranuleMaterializeStats(const GranuleMaterializeStats& stats) override;
+	void atomicOp(const KeyRef& key, const ValueRef& operand, uint32_t operationType);
+	void set(const KeyRef& key, const ValueRef& value);
+	void clear(const KeyRangeRef& range);
+	void clear(const KeyRef& key);
 
-	void addReadConflictRange(KeyRangeRef const& keys) override;
-	void makeSelfConflicting() override { tr.makeSelfConflicting(); }
+	[[nodiscard]] Future<Void> watch(const Key& key);
 
-	void atomicOp(const KeyRef& key, const ValueRef& operand, uint32_t operationType) override;
-	void set(const KeyRef& key, const ValueRef& value) override;
-	void clear(const KeyRangeRef& range) override;
-	void clear(const KeyRef& key) override;
+	void addWriteConflictRange(KeyRangeRef const& keys);
 
-	[[nodiscard]] Future<Void> watch(const Key& key) override;
+	[[nodiscard]] Future<Void> commit();
+	Version getCommittedVersion() const { return tr.getCommittedVersion(); }
+	VersionVector getVersionVector() const { return tr.getVersionVector(); }
+	SpanContext getSpanContext() const { return tr.getSpanContext(); }
 
-	void addWriteConflictRange(KeyRangeRef const& keys) override;
+	double getTagThrottledDuration() const { return tr.getTagThrottledDuration(); }
+	int64_t getTotalCost() const { return tr.getTotalCost(); }
+	int64_t getApproximateSize() const { return approximateSize; }
+	[[nodiscard]] Future<Standalone<StringRef>> getVersionstamp();
 
-	[[nodiscard]] Future<Void> commit() override;
-	Version getCommittedVersion() const override { return tr.getCommittedVersion(); }
-	VersionVector getVersionVector() const override { return tr.getVersionVector(); }
-	SpanContext getSpanContext() const override { return tr.getSpanContext(); }
+	void setOption(FDBTransactionOptions::Option option, Optional<StringRef> value = Optional<StringRef>());
 
-	double getTagThrottledDuration() const override { return tr.getTagThrottledDuration(); }
-	int64_t getTotalCost() const override { return tr.getTotalCost(); }
-	int64_t getApproximateSize() const override { return approximateSize; }
-	[[nodiscard]] Future<Standalone<StringRef>> getVersionstamp() override;
-
-	void setOption(FDBTransactionOptions::Option option, Optional<StringRef> value = Optional<StringRef>()) override;
-
-	[[nodiscard]] Future<Void> onError(Error const& e) override;
+	[[nodiscard]] Future<Void> onError(Error const& e);
 
 	// These are to permit use as state variables in actors:
-	ReadYourWritesTransaction() : cache(&arena), writes(&arena) {}
+	ReadYourWritesTransaction();
 	void operator=(ReadYourWritesTransaction&& r) noexcept;
 	ReadYourWritesTransaction(ReadYourWritesTransaction&& r) noexcept;
 
-	void cancel() override;
-	void reset() override;
-	void debugTransaction(UID dID) override { tr.debugTransaction(dID); }
+	void cancel();
+	void reset();
+	void debugTransaction(UID dID) { tr.debugTransaction(dID); }
 
 	Future<Void> debug_onIdle() { return reading; }
 
@@ -176,13 +160,13 @@ public:
 	// Throws before the lifetime of this transaction ends
 	Future<Void> resetFuture() { return resetPromise.getFuture(); }
 
-	void checkDeferredError() const override {
+	void checkDeferredError() const {
 		tr.checkDeferredError();
 		if (deferredError.code() != invalid_error_code)
 			throw deferredError;
 	}
 
-	void getWriteConflicts(KeyRangeMap<bool>* result) override;
+	void getWriteConflicts(KeyRangeMap<bool>* result);
 
 	Database getDatabase() const { return tr.getDatabase(); }
 
@@ -201,7 +185,7 @@ public:
 
 	KeyRangeMap<std::pair<bool, Optional<Value>>>& getSpecialKeySpaceWriteMap() { return specialKeySpaceWriteMap; }
 	bool readYourWritesDisabled() const { return options.readYourWritesDisabled; }
-	const Optional<std::string>& getSpecialKeySpaceErrorMsg() { return specialKeySpaceErrorMsg; }
+	const Optional<std::string>& getSpecialKeySpaceErrorMsg() const { return specialKeySpaceErrorMsg; }
 	void setSpecialKeySpaceErrorMsg(const std::string& msg) {
 		if (g_network && g_network->isSimulated()) {
 			try {
@@ -215,20 +199,29 @@ public:
 	}
 	Transaction& getTransaction() { return tr; }
 
-	Optional<Reference<Tenant>> getTenant() { return tr.getTenant(); }
 	TagSet const& getTags() const { return tr.getTags(); }
 
 	// used in template functions as returned Future type
 	template <typename Type>
 	using FutureT = Future<Type>;
 
+	// not virtual because final class
+	void debugTrace(BaseTraceEvent&& event);
+	void debugPrint(std::string const& message);
+
+	// Used by ThreadSafeTransaction for exceptions thrown in void methods.
+	Error deferredError;
+
+	std::vector<BaseTraceEvent> debugTraces;
+	std::vector<std::string> debugMessages;
+
 private:
 	friend class RYWImpl;
+	struct RYWState;
 
 	Arena arena;
 	Transaction tr;
-	SnapshotCache cache;
-	WriteMap writes;
+	std::unique_ptr<RYWState> rywState;
 	CoalescedKeyRefRangeMap<bool> readConflicts;
 	Map<Key, std::vector<Reference<Watch>>> watchMap; // Keys that are being watched in this transaction
 	Promise<Void> resetPromise;
@@ -253,10 +246,6 @@ private:
 	Optional<std::string> specialKeySpaceErrorMsg;
 
 	void resetTimeout();
-	void updateConflictMap(KeyRef const& key, WriteMap::iterator& it); // pre: it.segmentContains(key)
-	void updateConflictMap(
-	    KeyRangeRef const& keys,
-	    WriteMap::iterator& it); // pre: it.segmentContains(keys.begin), keys are already inside this->arena
 	void writeRangeToNativeTransaction(KeyRangeRef const& keys);
 
 	void resetRyow(); // doesn't reset the encapsulated transaction, or creation time/retry state
@@ -274,5 +263,7 @@ private:
 	std::vector<std::pair<FDBTransactionOptions::Option, Optional<WipedString>>> sensitivePersistentOptions;
 	ReadYourWritesTransactionOptions options;
 };
+
+Future<Optional<Value>> getJSON(Database db, std::string jsonField = "");
 
 #endif

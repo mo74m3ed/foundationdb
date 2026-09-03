@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,8 @@ template <class T, typename = void>
 struct is_fb_function_t : std::false_type {};
 
 template <class T>
-struct is_fb_function_t<T, typename std::enable_if<T::is_fb_visitor>::type> : std::true_type {};
+    requires(T::is_fb_visitor)
+struct is_fb_function_t<T> : std::true_type {};
 
 template <class T>
 constexpr bool is_fb_function = is_fb_function_t<T>::value;
@@ -60,8 +61,8 @@ template <class T, typename = void>
 struct fb_must_appear_last_t : std::false_type {};
 
 template <class T>
-struct fb_must_appear_last_t<T, typename std::enable_if<T::fb_must_appear_last>::type>
-  : std::conditional_t<T::fb_must_appear_last, std::true_type, std::false_type> {};
+    requires(T::fb_must_appear_last)
+struct fb_must_appear_last_t<T> : std::conditional_t<T::fb_must_appear_last, std::true_type, std::false_type> {};
 
 template <class T>
 constexpr bool fb_must_appear_last = fb_must_appear_last_t<T>::value;
@@ -84,7 +85,8 @@ constexpr bool fb_appears_last_property(pack<Items...>) {
 }
 
 template <class Visitor, class... Items>
-typename std::enable_if<is_fb_function<Visitor>, void>::type serializer(Visitor& visitor, Items&... items) {
+    requires(is_fb_function<Visitor>)
+void serializer(Visitor& visitor, Items&... items) {
 	static_assert(fb_appears_last_property(pack<Items...>{}),
 	              "An argument to a serializer call that must appear last (Arena?) does not appear last");
 	visitor(items...);

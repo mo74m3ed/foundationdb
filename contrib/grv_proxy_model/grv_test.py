@@ -5,7 +5,7 @@
 #
 # This source file is part of the FoundationDB open source project
 #
-# Copyright 2013-2020 Apple Inc. and the FoundationDB project authors
+# Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,11 +24,9 @@ import argparse
 import inspect
 import sys
 
-import rate_model
 import workload_model
 import proxy_model
 import ratekeeper_model
-from priority import Priority
 from plot import Plotter
 
 parser = argparse.ArgumentParser()

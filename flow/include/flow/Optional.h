@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2023 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,9 +26,13 @@
 
 #include "flow/Traceable.h"
 #include "flow/FileIdentifier.h"
-#include "flow/Error.h"
+#include "flow/swift_support.h"
+#ifdef WITH_SWIFT
+#include <swift/bridging>
+#endif
 
 class Arena;
+class Void;
 
 // Optional is a wrapper for std::optional. There
 // are two primary reasons to use this wrapper instead
@@ -43,9 +47,14 @@ class Arena;
 //    assertion failures are preferable. This is the main reason we
 //    don't intend to use std::optional directly.
 template <class T>
-class Optional : public ComposedIdentifier<T, 4> {
+class
+#ifdef WITH_SWIFT
+    SWIFT_CONFORMS_TO_PROTOCOL(flow_swift.FlowOptionalProtocol)
+#endif
+        Optional : public ComposedIdentifier<T, 4> {
 public:
 	using ValueType = T;
+	using Wrapped = T;
 
 	Optional() = default;
 
@@ -78,18 +87,16 @@ private:
 	template <class F>
 	using MapRet = std::decay_t<std::invoke_result_t<F, T>>;
 
-	template <class F>
-	using EnableIfNotMemberPointer =
-	    std::enable_if_t<!std::is_member_object_pointer_v<F> && !std::is_member_function_pointer_v<F>>;
-
 public:
 	// If the optional is set, calls the function f on the value and returns the value. Otherwise, returns an empty
 	// optional.
-	template <class F, typename = EnableIfNotMemberPointer<F>>
+	template <class F>
+	    requires(!std::is_member_object_pointer_v<F> && !std::is_member_function_pointer_v<F>)
 	Optional<MapRet<F>> map(const F& f) const& {
 		return present() ? Optional<MapRet<F>>(f(get())) : Optional<MapRet<F>>();
 	}
-	template <class F, typename = EnableIfNotMemberPointer<F>>
+	template <class F>
+	    requires(!std::is_member_object_pointer_v<F> && !std::is_member_function_pointer_v<F>)
 	Optional<MapRet<F>> map(const F& f) && {
 		return present() ? Optional<MapRet<F>>(f(std::move(*this).get())) : Optional<MapRet<F>>();
 	}
@@ -98,13 +105,13 @@ public:
 	//
 	// v.map(&T::member) is equivalent to v.map([](T v) { return v.member; })
 	template <class R, class Rp = std::decay_t<R>>
-	std::enable_if_t<std::is_class_v<T>, Optional<Rp>> map(
-	    R std::conditional_t<std::is_class_v<T>, T, Void>::*member) const& {
+	    requires(std::is_class_v<T>)
+	Optional<Rp> map(R std::conditional_t<std::is_class_v<T>, T, Void>::* member) const& {
 		return present() ? Optional<Rp>(get().*member) : Optional<Rp>();
 	}
 	template <class R, class Rp = std::decay_t<R>>
-	std::enable_if_t<std::is_class_v<T>, Optional<Rp>> map(
-	    R std::conditional_t<std::is_class_v<T>, T, Void>::*member) && {
+	    requires(std::is_class_v<T>)
+	Optional<Rp> map(R std::conditional_t<std::is_class_v<T>, T, Void>::* member) && {
 		return present() ? Optional<Rp>(std::move(*this).get().*member) : Optional<Rp>();
 	}
 
@@ -113,15 +120,15 @@ public:
 	// v.map(&T::memberFunc, arg1, arg2, ...) is equivalent to
 	// v.map([](T v) { return v.memberFunc(arg1, arg2, ...); })
 	template <class R, class... Args, class Rp = std::decay_t<R>>
-	std::enable_if_t<std::is_class_v<T>, Optional<Rp>> map(
-	    R (std::conditional_t<std::is_class_v<T>, T, Void>::*memberFunc)(Args...) const,
-	    Args&&... args) const& {
+	    requires(std::is_class_v<T>)
+	Optional<Rp> map(R (std::conditional_t<std::is_class_v<T>, T, Void>::*memberFunc)(Args...) const,
+	                 Args&&... args) const& {
 		return present() ? Optional<Rp>((get().*memberFunc)(std::forward<Args>(args)...)) : Optional<Rp>();
 	}
 	template <class R, class... Args, class Rp = std::decay_t<R>>
-	std::enable_if_t<std::is_class_v<T>, Optional<Rp>> map(
-	    R (std::conditional_t<std::is_class_v<T>, T, Void>::*memberFunc)(Args...) const,
-	    Args&&... args) && {
+	    requires(std::is_class_v<T>)
+	Optional<Rp> map(R (std::conditional_t<std::is_class_v<T>, T, Void>::*memberFunc)(Args...) const,
+	                 Args&&... args) && {
 		return present() ? Optional<Rp>((std::move(*this).get().*memberFunc)(std::forward<Args>(args)...))
 		                 : Optional<Rp>();
 	}
@@ -132,7 +139,8 @@ public:
 	//
 	// v.mapRef(&P::member) is equivalent to Optional<R>(v.get()->member) if v is present and non-null
 	template <class P, class R, class Rp = std::decay_t<R>>
-	std::enable_if_t<std::is_class_v<T> || std::is_pointer_v<T>, Optional<Rp>> mapRef(R P::*member) const& {
+	    requires(std::is_class_v<T> || std::is_pointer_v<T>)
+	Optional<Rp> mapRef(R P::* member) const& {
 		if (!present() || !get()) {
 			return Optional<Rp>();
 		}
@@ -148,8 +156,8 @@ public:
 	// v.mapRef(&T::memberFunc, arg1, arg2, ...) is equivalent to Optional<R>(v.get()->memberFunc(arg1, arg2, ...)) if v
 	// is present and non-null
 	template <class P, class R, class... Args, class Rp = std::decay_t<R>>
-	std::enable_if_t<std::is_class_v<T> || std::is_pointer_v<T>, Optional<Rp>> mapRef(R (P::*memberFunc)(Args...) const,
-	                                                                                  Args&&... args) const& {
+	    requires(std::is_class_v<T> || std::is_pointer_v<T>)
+	Optional<Rp> mapRef(R (P::*memberFunc)(Args...) const, Args&&... args) const& {
 		if (!present() || !get()) {
 			return Optional<Rp>();
 		}

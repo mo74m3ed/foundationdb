@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2023 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -273,7 +273,7 @@ class WatchesIntegrationTest {
   }
 
   private void ensureConnected(Database db) throws Exception {
-    // Run one transaction succesfully to ensure we established connection
+    // Run one transaction successfully to ensure we established connection
     db.run(tr -> {
       tr.getReadVersion().join();
       return null;

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2023 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,10 @@ constexpr int HTTP_STATUS_CODE_OK = 200;
 constexpr int HTTP_STATUS_CODE_CREATED = 201;
 constexpr int HTTP_STATUS_CODE_ACCEPTED = 202;
 constexpr int HTTP_STATUS_CODE_NO_CONTENT = 204;
+constexpr int HTTP_STATUS_CODE_PARTIAL_CONTENT = 206;
+constexpr int HTTP_STATUS_CODE_BAD_REQUEST = 400;
 constexpr int HTTP_STATUS_CODE_UNAUTHORIZED = 401;
+constexpr int HTTP_STATUS_CODE_NOT_FOUND = 404;
 constexpr int HTTP_STATUS_CODE_NOT_ACCEPTABLE = 406;
 constexpr int HTTP_STATUS_CODE_TIMEOUT = 408;
 constexpr int HTTP_STATUS_CODE_TOO_MANY_REQUESTS = 429;
@@ -58,9 +61,12 @@ const std::string HTTP_VERB_PUT = "PUT";
 const std::string HTTP_VERB_POST = "POST";
 const std::string HTTP_VERB_CONNECT = "CONNECT";
 
-typedef std::map<std::string, std::string, is_iless> Headers;
+using Headers = std::map<std::string, std::string, is_iless>;
 
 std::string urlEncode(const std::string& s);
+// URL decode a percent-encoded string, converting %XX hex sequences to characters
+// and + characters to spaces. Used for parsing query parameters and form data.
+std::string urlDecode(const std::string& s);
 std::string awsV4URIEncode(const std::string& s, bool encodeSlash);
 
 template <class T>
@@ -80,7 +86,8 @@ bool verifyMD5(HTTPData<std::string>* data,
 
 template <class T>
 struct RequestBase : ReferenceCounted<RequestBase<T>> {
-	RequestBase() {}
+	RequestBase() = default;
+	virtual ~RequestBase() = default;
 	std::string verb;
 	std::string resource;
 	HTTPData<T> data;
@@ -98,7 +105,7 @@ struct OutgoingRequest : RequestBase<UnsentPacketQueue*> {};
 
 template <class T>
 struct ResponseBase : ReferenceCounted<ResponseBase<T>> {
-	ResponseBase() {}
+	ResponseBase() : code(200) {} // Initialize code to 200 (OK) by default
 	float version;
 	int code;
 	HTTPData<T> data;
@@ -130,6 +137,10 @@ Future<Reference<IConnection>> proxyConnect(const std::string& remoteHost,
 
 // HTTP server stuff
 
+// Registers an http handler that just asserts false if it ever gets an http request.
+// This is used to validate that clients only talk to the http servers they're supposed to talk to
+Future<Void> registerAlwaysFailHTTPHandler();
+
 // Implementation of http server that handles http requests
 // TODO: could change to factory pattern instead of clone pattern
 struct IRequestHandler {
@@ -140,7 +151,7 @@ struct IRequestHandler {
 	// Actual callback implementation. Fills out the response object based on the request.
 	virtual Future<Void> handleRequest(Reference<IncomingRequest>, Reference<OutgoingResponse>) = 0;
 
-	// If each instance has a mix of global state provided in the type-specific construtor, but then also local state
+	// If each instance has a mix of global state provided in the type-specific constructor, but then also local state
 	// instantiated in init, the default instance passed to registerSimHTTPServer is cloned for each process to copy the
 	// global state, but before init is called. You may optionally clone after init, but the contract is that clone must
 	// not copy or share the non-global state between instances.
@@ -155,10 +166,14 @@ struct SimRegisteredHandlerContext : ReferenceCounted<SimRegisteredHandlerContex
 public:
 	std::string hostname;
 	std::string service;
+	int port;
 	Reference<IRequestHandler> requestHandler;
 
-	SimRegisteredHandlerContext(std::string hostname, std::string service, Reference<IRequestHandler> requestHandler)
-	  : hostname(hostname), service(service), requestHandler(requestHandler) {}
+	SimRegisteredHandlerContext(std::string hostname,
+	                            std::string service,
+	                            int port,
+	                            Reference<IRequestHandler> requestHandler)
+	  : hostname(hostname), service(service), port(port), requestHandler(requestHandler) {}
 
 	void addAddress(NetworkAddress addr);
 	void removeIp(IPAddress addr);
@@ -171,15 +186,13 @@ private:
 struct SimServerContext : ReferenceCounted<SimServerContext>, NonCopyable {
 	UID dbgid;
 	bool running;
-	int nextPort;
 	ActorCollection actors;
 	std::vector<NetworkAddress> listenAddresses;
 	std::vector<Future<Void>> listenBinds;
 	std::vector<Reference<IListener>> listeners;
 
-	SimServerContext() : dbgid(deterministicRandom()->randomUniqueID()), running(true), actors(false), nextPort(5000) {}
+	SimServerContext() : dbgid(deterministicRandom()->randomUniqueID()), running(true), actors(false) {}
 
-	NetworkAddress newAddress();
 	void registerNewServer(NetworkAddress addr, Reference<IRequestHandler> server);
 
 	void stop() {

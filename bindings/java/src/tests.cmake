@@ -3,7 +3,7 @@
 #
 # This source file is part of the FoundationDB open source project
 #
-# Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+# Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -53,7 +53,6 @@ set(JAVA_INTEGRATION_TESTS
   src/integration/com/apple/foundationdb/SidebandMultiThreadClientTest.java
   src/integration/com/apple/foundationdb/RepeatableReadMultiThreadClientTest.java
   src/integration/com/apple/foundationdb/MappedRangeQueryIntegrationTest.java
-  src/integration/com/apple/foundationdb/BlobGranuleIntegrationTest.java
   src/integration/com/apple/foundationdb/GetClientStatusIntegrationTest.java
   src/integration/com/apple/foundationdb/TransactionIntegrationTest.java
   src/integration/com/apple/foundationdb/FutureIntegrationTest.java

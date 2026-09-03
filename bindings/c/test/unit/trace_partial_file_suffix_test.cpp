@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -61,7 +61,9 @@ int main(int argc, char** argv) {
 	    "trace.127.0.0.1." + file_identifier + ".simulated.xml" + trace_partial_file_suffix;
 
 	// Simulate this process crashing previously by creating a ".tmp" file
-	{ std::ofstream file{ simulated_stray_partial_file }; }
+	{
+		std::ofstream file{ simulated_stray_partial_file };
+	}
 
 	set_net_opt(FDBNetworkOption::FDB_NET_OPTION_TRACE_ENABLE, "");
 	set_net_opt(FDBNetworkOption::FDB_NET_OPTION_TRACE_FILE_IDENTIFIER, file_identifier);

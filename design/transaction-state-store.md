@@ -22,7 +22,7 @@ inconsistently in the code base as "metadata mutations" in commit proxies and
 
 ## Why do we need transaction state store?
 
-When bootstraping an FDB cluster, the cluster controller (CC) role recruits a
+When bootstrapping an FDB cluster, the cluster controller (CC) role recruits a
 new transaction system and initializes them. In particular, the transaction state store
 is first read by the CC from previous generation's log system, and then broadcast to
 all commit proxies of the new transaction system. After initializing `txnStateStore`, these
@@ -45,7 +45,7 @@ conflict resolution request to all Resolvers and they process transactions in st
 of commit versions. Leveraging this mechanism, each commit proxy sends all metadata
 (i.e., system key) mutations to all Resolvers. Resolvers keep these mutations in memory
 and forward to other commit proxies in separate resolution response. Each commit proxy
-receive resolution response, along with metadata mutations happend at other proxies before
+receive resolution response, along with metadata mutations happened at other proxies before
 its commit version, and apply all these metadata mutations in the commit order.
 Finally, this proxy only writes metadata mutations in its own transaction batch to TLogs,
 i.e., do not write other proxies' metadata mutations to TLogs to avoid repeated writes.
@@ -67,7 +67,7 @@ backup data and is *NOT* metadata mutations.
 
 When a commit proxy writes metadata mutations to the log system, the proxy assigns a
 "txs" tag to the mutation. Depending on FDB versions, the "txs" tag can be one special
-tag `txsTag{ tagLocalitySpecial, 1 }` for `TLogVersion::V3` (FDB 6.1) or a randomized
+tag `txsTag{ tagLocalitySpecial, 1 }` for `TLogVersion::V3` (FDB 6.1, obsolete now) or a randomized
 "txs" tag for `TLogVersion::V4` (FDB 6.2 and later) and larger. The idea of randomized
 "txs" tag is to spread metadata mutations to all TLogs for faster parallel recovery of
 `txnStateStore`.
@@ -114,4 +114,4 @@ during recovery, `txnStateStore` is recovered by reading all data from this vers
 
 * Commit proxies only write metadata mutations in its own transaction batch to TLogs: https://github.com/apple/foundationdb/blob/6281e647784e74dccb3a6cb88efb9d8b9cccd376/fdbserver/CommitProxyServer.actor.cpp#L772-L774 adds mutations to `storeCommits`. Later in `postResolution()`, https://github.com/apple/foundationdb/blob/6281e647784e74dccb3a6cb88efb9d8b9cccd376/fdbserver/CommitProxyServer.actor.cpp#L1162-L1176, only the last one in `storeCommits` are send to TLogs.
 
-* Commit proxies clear the buffered data in `LogSystemDiskQueueAdapter` after TLog push: https://github.com/apple/foundationdb/blob/6281e647784e74dccb3a6cb88efb9d8b9cccd376/fdbserver/CommitProxyServer.actor.cpp#L1283-L1287
+* Commit proxies clear the buffered data, and advance the transaction state store's pop version `poppedUpTo`, in `LogSystemDiskQueueAdapter` after TLog push: https://github.com/apple/foundationdb/blob/6281e647784e74dccb3a6cb88efb9d8b9cccd376/fdbserver/CommitProxyServer.actor.cpp#L1283-L1287 https://github.com/apple/foundationdb/blob/4ce8a7c8b414936662622c83d99a67fe93783a81/fdbserver/KeyValueStoreMemory.cpp#L1033-L1034 https://github.com/apple/foundationdb/blob/4ce8a7c8b414936662622c83d99a67fe93783a81/fdbserver/LogSystemDiskQueueAdapter.actor.cpp#L213.

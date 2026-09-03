@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@
 
 package fdb
 
-// #define FDB_API_VERSION 710300
+// #define FDB_API_VERSION 800
 // #include <foundationdb/fdb_c.h>
 import "C"
 
@@ -30,6 +30,10 @@ import (
 	"errors"
 	"runtime"
 )
+
+// ErrMultiVersionClientUnavailable is returned when the multi-version client API is unavailable.
+// Client status information is available only when such API is enabled.
+var ErrMultiVersionClientUnavailable = errors.New("multi-version client API is unavailable")
 
 // Database is a handle to a FoundationDB database. Database is a lightweight
 // object that may be efficiently copied, and is safe for concurrent use by
@@ -61,29 +65,27 @@ type DatabaseOptions struct {
 }
 
 // Close will close the Database and clean up all resources.
-// You have to ensure that you're not resuing this database.
-func (d *Database) Close() {
+// It must be called exactly once for each created database.
+// You have to ensure that you're not reusing this database
+// after it has been closed.
+func (d Database) Close() {
 	// Remove database object from the cached databases
 	if d.isCached {
-		delete(openDatabases, d.clusterFile)
+		openDatabases.Delete(d.clusterFile)
+	}
+
+	if d.ptr == nil {
+		return
 	}
 
 	// Destroy the database
-	d.destroy()
+	C.fdb_database_destroy(d.ptr)
 }
 
 func (opt DatabaseOptions) setOpt(code int, param []byte) error {
 	return setOpt(func(p *C.uint8_t, pl C.int) C.fdb_error_t {
 		return C.fdb_database_set_option(opt.d.ptr, C.FDBDatabaseOption(code), p, pl)
 	}, param)
-}
-
-func (d *database) destroy() {
-	if d.ptr == nil {
-		return
-	}
-
-	C.fdb_database_destroy(d.ptr)
 }
 
 // CreateTransaction returns a new FoundationDB transaction. It is generally
@@ -98,6 +100,9 @@ func (d Database) CreateTransaction() (Transaction, error) {
 	}
 
 	t := &transaction{outt, d}
+	// transactions cannot be destroyed explicitly if any future is still potentially used
+	// thus the GC is used to figure out when all Go wrapper objects for futures have gone out of scope,
+	// making the transaction ready to be garbage-collected.
 	runtime.SetFinalizer(t, (*transaction).destroy)
 
 	return Transaction{t}, nil
@@ -107,16 +112,24 @@ func (d Database) CreateTransaction() (Transaction, error) {
 // from the go bindings. If a suspendDuration > 0 is provided the rebooted process will be
 // suspended for suspendDuration seconds. If checkFile is set to true the process will check
 // if the data directory is writeable by creating a validation file. The address must be a
-// process address is the form of IP:Port pair.
+// process address is the form of IP:Port pair without the :tls suffix if the cluster is running
+// with TLS enabled. The address can also be multiple processes addresses concated by a comma, e.g.
+// "IP1:Port,IP2:port", in this case the RebootWorker will reboot all provided addresses concurrently.
+// It's not recommened to close the Database directly after calling the RebootWorker method as the
+// reboot commands will be queue and executed asynchronous. If the Database context is closed immediately
+// some of the commands might not be delievered, even if the RebootWorker method returned successfully.
 func (d Database) RebootWorker(address string, checkFile bool, suspendDuration int) error {
 	t := &futureInt64{
-		future: newFuture(C.fdb_database_reboot_worker(
-			d.ptr,
-			byteSliceToPtr([]byte(address)),
-			C.int(len(address)),
-			C.fdb_bool_t(boolToInt(checkFile)),
-			C.int(suspendDuration),
-		),
+		future: newFutureWithDb(
+			d.database,
+			nil,
+			C.fdb_database_reboot_worker(
+				d.ptr,
+				byteSliceToPtr([]byte(address)),
+				C.int(len(address)),
+				C.fdb_bool_t(boolToInt(checkFile)),
+				C.int(suspendDuration),
+			),
 		),
 	}
 
@@ -129,25 +142,61 @@ func (d Database) RebootWorker(address string, checkFile bool, suspendDuration i
 	return err
 }
 
-func retryable(wrapped func() (interface{}, error), onError func(Error) FutureNil) (ret interface{}, e error) {
+// GetClientStatus returns a JSON byte slice containing database client-side status information.
+// At the top level the report describes the status of the Multi-Version Client database - its initialization state, the protocol version, the available client versions; it also embeds the status of the actual version-specific database and within it the addresses of various FDB server roles the client is aware of and their connection status.
+// NOTE: ErrMultiVersionClientUnavailable will be returned if the Multi-Version client API was not enabled.
+func (d Database) GetClientStatus() ([]byte, error) {
+	if apiVersion == 0 {
+		return nil, ErrAPIVersionUnset
+	}
+
+	st := &futureByteSlice{
+		future: newFutureWithDb(d.database, nil, C.fdb_database_get_client_status(d.ptr)),
+	}
+
+	b, err := st.Get()
+	if err != nil {
+		return nil, err
+	}
+	if len(b) == 0 {
+		return nil, ErrMultiVersionClientUnavailable
+	}
+
+	return b, nil
+}
+
+// GetMainThreadBusyness return network thread busyness (updated every 1s)
+// A value of 0 indicates that the client is more or less idle
+// A value of 1 (or more) indicates that the client is saturated
+func (d Database) GetMainThreadBusyness() float64 {
+	return float64(C.fdb_database_get_main_thread_busyness(d.database.ptr))
+}
+
+func retryable(wrapped func() (interface{}, error), onError func(Error) FutureNil) (ret interface{}, err error) {
 	for {
-		ret, e = wrapped()
+		ret, err = wrapped()
 
 		// No error means success!
-		if e == nil {
+		if err == nil {
 			return
 		}
 
 		// Check if the error chain contains an
 		// fdb.Error
 		var ep Error
-		if errors.As(e, &ep) {
-			e = onError(ep).Get()
+		if errors.As(err, &ep) {
+			processedErr := onError(ep).Get()
+			var newEp Error
+			if !errors.As(processedErr, &newEp) || newEp.Code != ep.Code {
+				// override original error only if not an Error or code changed
+				// fdb_transaction_on_error(), called by OnError, will currently almost always return same error as the original one
+				err = processedErr
+			}
 		}
 
 		// If OnError returns an error, then it's not
 		// retryable; otherwise take another pass at things
-		if e != nil {
+		if err != nil {
 			return
 		}
 	}
@@ -176,19 +225,19 @@ func retryable(wrapped func() (interface{}, error), onError func(Error) FutureNi
 // See the Transactor interface for an example of using Transact with
 // Transaction and Database objects.
 func (d Database) Transact(f func(Transaction) (interface{}, error)) (interface{}, error) {
-	tr, e := d.CreateTransaction()
+	tr, err := d.CreateTransaction()
 	// Any error here is non-retryable
-	if e != nil {
-		return nil, e
+	if err != nil {
+		return nil, err
 	}
 
-	wrapped := func() (ret interface{}, e error) {
-		defer panicToError(&e)
+	wrapped := func() (ret interface{}, err error) {
+		defer panicToError(&err)
 
-		ret, e = f(tr)
+		ret, err = f(tr)
 
-		if e == nil {
-			e = tr.Commit().Get()
+		if err == nil {
+			err = tr.Commit().Get()
 		}
 
 		return
@@ -209,6 +258,8 @@ func (d Database) Transact(f func(Transaction) (interface{}, error)) (interface{
 //
 // The transaction is retried if the error is or wraps a retryable Error.
 // The error is unwrapped.
+// Read transactions are never committed and destroyed automatically via GC,
+// once all their futures go out of scope.
 //
 // Do not return Future objects from the function provided to ReadTransact. The
 // Transaction created by ReadTransact may be finalized at any point after
@@ -219,20 +270,19 @@ func (d Database) Transact(f func(Transaction) (interface{}, error)) (interface{
 // See the ReadTransactor interface for an example of using ReadTransact with
 // Transaction, Snapshot and Database objects.
 func (d Database) ReadTransact(f func(ReadTransaction) (interface{}, error)) (interface{}, error) {
-	tr, e := d.CreateTransaction()
-	// Any error here is non-retryable
-	if e != nil {
-		return nil, e
+	tr, err := d.CreateTransaction()
+	if err != nil {
+		// Any error here is non-retryable
+		return nil, err
 	}
 
-	wrapped := func() (ret interface{}, e error) {
-		defer panicToError(&e)
+	wrapped := func() (ret interface{}, err error) {
+		defer panicToError(&err)
 
-		ret, e = f(tr)
+		ret, err = f(tr)
 
-		if e == nil {
-			e = tr.Commit().Get()
-		}
+		// read-only transactions are not committed and will be destroyed automatically via GC,
+		// once all the futures go out of scope
 
 		return
 	}
@@ -258,9 +308,9 @@ func (d Database) Options() DatabaseOptions {
 // If readVersion is non-zero, the boundary keys as of readVersion will be
 // returned.
 func (d Database) LocalityGetBoundaryKeys(er ExactRange, limit int, readVersion int64) ([]Key, error) {
-	tr, e := d.CreateTransaction()
-	if e != nil {
-		return nil, e
+	tr, err := d.CreateTransaction()
+	if err != nil {
+		return nil, err
 	}
 
 	if readVersion != 0 {
@@ -276,9 +326,9 @@ func (d Database) LocalityGetBoundaryKeys(er ExactRange, limit int, readVersion 
 		append(Key("\xFF/keyServers/"), ek.FDBKey()...),
 	}
 
-	kvs, e := tr.Snapshot().GetRange(ffer, RangeOptions{Limit: limit}).GetSliceWithError()
-	if e != nil {
-		return nil, e
+	kvs, err := tr.Snapshot().GetRange(ffer, RangeOptions{Limit: limit}).GetSliceWithError()
+	if err != nil {
+		return nil, err
 	}
 
 	size := len(kvs)

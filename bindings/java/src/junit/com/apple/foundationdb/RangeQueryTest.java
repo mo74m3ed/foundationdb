@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -82,31 +82,6 @@ class RangeQueryTest {
 			}
 
 			@Override
-			public Tenant openTenant(Tuple tenantName) {
-				throw new UnsupportedOperationException("Unimplemented method 'openTenant'");
-			}
-
-			@Override
-			public Tenant openTenant(byte[] tenantName, Executor e) {
-				throw new UnsupportedOperationException("Unimplemented method 'openTenant'");
-			}
-
-			@Override
-			public Tenant openTenant(Tuple tenantName, Executor e) {
-				throw new UnsupportedOperationException("Unimplemented method 'openTenant'");
-			}
-
-			@Override
-			public Tenant openTenant(byte[] tenantName, Executor e, EventKeeper eventKeeper) {
-				throw new UnsupportedOperationException("Unimplemented method 'openTenant'");
-			}
-
-			@Override
-			public Tenant openTenant(Tuple tenantName, Executor e, EventKeeper eventKeeper) {
-				throw new UnsupportedOperationException("Unimplemented method 'openTenant'");
-			}
-
-			@Override
 			public Transaction createTransaction(Executor e) {
 				throw new UnsupportedOperationException("Unimplemented method 'createTransaction'");
 			}
@@ -124,49 +99,6 @@ class RangeQueryTest {
 			@Override
 			public double getMainThreadBusyness() {
 				throw new UnsupportedOperationException("Unimplemented method 'getMainThreadBusyness'");
-			}
-
-			@Override
-			public CompletableFuture<byte[]> purgeBlobGranules(byte[] beginKey, byte[] endKey, long purgeVersion,
-					boolean force, Executor e) {
-				throw new UnsupportedOperationException("Unimplemented method 'purgeBlobGranules'");
-			}
-
-			@Override
-			public CompletableFuture<Void> waitPurgeGranulesComplete(byte[] purgeKey, Executor e) {
-				throw new UnsupportedOperationException("Unimplemented method 'waitPurgeGranulesComplete'");
-			}
-
-			@Override
-			public CompletableFuture<Boolean> blobbifyRange(byte[] beginKey, byte[] endKey, Executor e) {
-				throw new UnsupportedOperationException("Unimplemented method 'blobbifyRange'");
-			}
-
-			@Override
-			public CompletableFuture<Boolean> blobbifyRangeBlocking(byte[] beginKey, byte[] endKey, Executor e) {
-				throw new UnsupportedOperationException("Unimplemented method 'blobbifyRangeBlocking'");
-			}
-
-			@Override
-			public CompletableFuture<Boolean> unblobbifyRange(byte[] beginKey, byte[] endKey, Executor e) {
-				throw new UnsupportedOperationException("Unimplemented method 'unblobbifyRange'");
-			}
-
-			@Override
-			public CompletableFuture<KeyRangeArrayResult> listBlobbifiedRanges(byte[] beginKey, byte[] endKey,
-					int rangeLimit, Executor e) {
-				throw new UnsupportedOperationException("Unimplemented method 'listBlobbifiedRanges'");
-			}
-
-			@Override
-			public CompletableFuture<Long> verifyBlobRange(byte[] beginKey, byte[] endKey, long version, Executor e) {
-				throw new UnsupportedOperationException("Unimplemented method 'verifyBlobRange'");
-			}
-
-			@Override
-			public CompletableFuture<Boolean> flushBlobRange(byte[] beginKey, byte[] endKey, boolean compact,
-					long version, Executor e) {
-				throw new UnsupportedOperationException("Unimplemented method 'flushBlobRange'");
 			}
 
 			@Override

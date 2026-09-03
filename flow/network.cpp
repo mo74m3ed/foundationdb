@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,9 +17,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#include <memory>
-
 #include <boost/asio.hpp>
 
 #include "flow/Arena.h"
@@ -40,7 +37,10 @@ void ChaosMetrics::clear() {
 }
 
 void ChaosMetrics::getFields(TraceEvent* e) {
-	std::pair<const char*, unsigned int> metrics[] = { { "DiskDelays", diskDelays }, { "BitFlips", bitFlips } };
+	std::pair<const char*, unsigned int> metrics[] = {
+		{ "DiskDelays", diskDelays },   { "BitFlips", bitFlips }, { "S3Errors", s3Errors },
+		{ "S3Throttles", s3Throttles }, { "S3Delays", s3Delays }, { "S3Corruptions", s3Corruptions }
+	};
 	if (e != nullptr) {
 		for (auto& m : metrics) {
 			char c = m.first[0];
@@ -108,6 +108,15 @@ BitFlipper* BitFlipper::flipper() {
 		g_network->setGlobal(INetwork::enBitFlipper, res);
 	}
 	return static_cast<BitFlipper*>(res);
+}
+
+S3FaultInjector* S3FaultInjector::injector() {
+	auto res = g_network->global(INetwork::enS3FaultInjector);
+	if (!res) {
+		res = new S3FaultInjector();
+		g_network->setGlobal(INetwork::enS3FaultInjector, res);
+	}
+	return static_cast<S3FaultInjector*>(res);
 }
 
 bool IPAddress::operator==(const IPAddress& rhs) const {
@@ -244,37 +253,69 @@ std::string formatIpPort(const IPAddress& ip, uint16_t port) {
 	return format(patt, ip.toString().c_str(), port);
 }
 
+DNSCache::DNSCache(const std::map<std::string, std::vector<NetworkAddress>>& dnsCache) {
+	for (const auto& [key, addresses] : dnsCache) {
+		entries[key].addresses = addresses;
+	}
+}
+
 Optional<std::vector<NetworkAddress>> DNSCache::find(const std::string& host, const std::string& service) {
-	auto it = hostnameToAddresses.find(host + ":" + service);
-	if (it != hostnameToAddresses.end()) {
-		return it->second;
+	auto it = entries.find(host + ":" + service);
+	if (it != entries.end()) {
+		it->second.lastAccess = g_network->now();
+		return it->second.addresses;
 	}
 	return {};
 }
 
 void DNSCache::add(const std::string& host, const std::string& service, const std::vector<NetworkAddress>& addresses) {
-	hostnameToAddresses[host + ":" + service] = addresses;
+	Entry& entry = entries[host + ":" + service];
+	entry.addresses = addresses;
+	entry.lastAccess = g_network->now();
+}
+
+void DNSCache::update(const std::string& host,
+                      const std::string& service,
+                      const std::vector<NetworkAddress>& addresses) {
+	entries[host + ":" + service].addresses = addresses;
 }
 
 void DNSCache::remove(const std::string& host, const std::string& service) {
-	auto it = hostnameToAddresses.find(host + ":" + service);
-	if (it != hostnameToAddresses.end()) {
-		hostnameToAddresses.erase(it);
+	auto it = entries.find(host + ":" + service);
+	if (it != entries.end()) {
+		entries.erase(it);
 	}
 }
 
 void DNSCache::clear() {
-	hostnameToAddresses.clear();
+	entries.clear();
+}
+
+std::vector<std::string> DNSCache::getKeys() const {
+	std::vector<std::string> keys;
+	keys.reserve(entries.size());
+	for (const auto& [key, _] : entries) {
+		keys.push_back(key);
+	}
+	return keys;
+}
+
+Optional<double> DNSCache::getLastAccess(const std::string& host, const std::string& service) const {
+	auto it = entries.find(host + ":" + service);
+	if (it != entries.end()) {
+		return it->second.lastAccess;
+	}
+	return {};
 }
 
 std::string DNSCache::toString() {
 	std::string ret;
-	for (auto it = hostnameToAddresses.begin(); it != hostnameToAddresses.end(); ++it) {
-		if (it != hostnameToAddresses.begin()) {
+	for (auto it = entries.begin(); it != entries.end(); ++it) {
+		if (it != entries.begin()) {
 			ret += ';';
 		}
 		ret += it->first + ',';
-		const std::vector<NetworkAddress>& addresses = it->second;
+		const std::vector<NetworkAddress>& addresses = it->second.addresses;
 		for (int i = 0; i < addresses.size(); ++i) {
 			ret += addresses[i].toString();
 			if (i != addresses.size() - 1) {
@@ -373,11 +414,15 @@ Future<Reference<IConnection>> INetworkConnections::connect(const std::string& h
 	// Wait for the endpoint to return, then wait for connect(endpoint) and return it.
 	// Template types are being provided explicitly because they can't be automatically deduced for some reason.
 	return mapAsync(pickEndpoint, [=](NetworkAddress const& addr) -> Future<Reference<IConnection>> {
+		// Pass the original hostname for SNI if this is a TLS connection from hostname
+		if (addr.isTLS() && addr.fromHostname) {
+			return connectExternalWithHostname(addr, host);
+		}
 		return connectExternal(addr);
 	});
 }
 
-IUDPSocket::~IUDPSocket() {}
+IUDPSocket::~IUDPSocket() = default;
 
 const std::vector<int> NetworkMetrics::starvationBins = { 1, 3500, 7000, 7500, 8500, 8900, 10500 };
 
@@ -441,9 +486,13 @@ TEST_CASE("/flow/network/ipV6Preferred") {
 		addresses.push_back(NetworkAddress::parse(s));
 	}
 	// Confirm IPv6 is always preferred.
-	ASSERT(INetworkConnections::pickOneAddress(addresses).toString() == ipv6);
+	ASSERT((INetworkConnections::pickOneAddress(addresses).toString() == ipv6) ==
+	       !FLOW_KNOBS->RESOLVE_PREFER_IPV4_ADDR);
 
 	return Void();
 }
 
 NetworkInfo::NetworkInfo() : handshakeLock(new FlowLock(FLOW_KNOBS->TLS_HANDSHAKE_LIMIT)) {}
+NetworkInfo::~NetworkInfo() {
+	delete handshakeLock;
+}

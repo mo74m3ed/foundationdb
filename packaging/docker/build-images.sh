@@ -35,6 +35,9 @@ function create_fake_website_directory () {
     fi
     local stripped_binaries_and_from_where="${1}"
     fdb_binaries=( 'fdbbackup' 'fdbcli' 'fdbserver' 'fdbmonitor' )
+    if [ -x "${build_output_directory}/packages/bin/mako" ]; then
+        fdb_binaries+=( 'mako' )
+    fi
     logg "PREPARING WEBSITE"
     website_directory="${script_dir}/website"
     rm -rf "${website_directory}"
@@ -46,9 +49,9 @@ function create_fake_website_directory () {
     # 2) fetch the stripped binaries and multiple client library versions
     #    from artifactory_base_url
     # 3) copy the unstripped binaries and client library from the current local
-    #    build_output of foundationdb
+    #    build_output of foundationdb. If CLANG=1 use cbuild_output.
     # 4) copy the stripped binaries and client library from the current local
-    #    build_output of foundationdb
+    #    build_output of foundationdb. If CLANG=1 use cbuild_output.
     ############################################################################
     logg "FETCHING BINARIES"
     case "${stripped_binaries_and_from_where}" in
@@ -171,9 +174,9 @@ function build_and_push_images () {
     if [ ${#} -ne 3 ]; then
         loge "INCORRECT NUMBER OF ARGS FOR ${FUNCNAME[0]}"
     fi
-    local dockerfile_name="${1}"
-    local use_development_java_bindings="${2}"
-    local push_docker_images="${3}"
+    local use_development_java_bindings="${1}"
+    local push_docker_images="${2}"
+    local debug_image="${3}"
     declare -a tags_to_push=()
     for image in "${image_list[@]}"; do
         logg "BUILDING ${image}"
@@ -184,7 +187,7 @@ function build_and_push_images () {
         if [ "${image}" == "foundationdb-kubernetes-sidecar" ]; then
             image_tag="${image_tag}-1"
         fi
-        if [ "${dockerfile_name}" == "Dockerfile.eks" ]; then
+        if [ "${debug_image}" == "true" ]; then
             image_tag="${image_tag}-debug"
         fi
         if [ "${image}" == "ycsb" ]; then
@@ -202,9 +205,14 @@ function build_and_push_images () {
             --build-arg HTTPS_PROXY="${HTTPS_PROXY}" \
             --build-arg HTTP_PROXY="${HTTP_PROXY}" \
             --tag "${image_tag}" \
-            --file "${dockerfile_name}" \
+            --file Dockerfile \
             --target "${image}" .
-        if [ "${image}" == 'foundationdb' ] || [ "${image}" == 'foundationdb-kubernetes-sidecar' ] || [ "${image}" == 'ycsb' ] ; then
+        if [ "${image}" == 'foundationdb' ] || \
+              [ "${image}" == 'foundationdb-kubernetes-sidecar' ] || \
+              [ "${image}" == 'fdb-aws-s3-credentials-fetcher-sidecar' ] || \
+              [ "${image}" == 'ycsb' ] || \
+              [ "${image}" == 'mako' ] || \
+              [ "${image}" == 'fdb-kubernetes-monitor' ]; then
             tags_to_push+=("${image_tag}")
         fi
     done
@@ -241,23 +249,24 @@ echo "${blue}###################################################################
 ################################################################################
 artifactory_base_url="${ARTIFACTORY_URL:-https://artifactory.foundationdb.org}"
 aws_region="us-west-2"
-aws_account_id=$(aws --output text sts get-caller-identity --query 'Account')
 build_date=$(date +"%Y-%m-%dT%H:%M:%S%z")
 build_output_directory="${script_dir}/../../"
 source_code_diretory=$(awk -F= '/foundationdb_SOURCE_DIR:STATIC/{print $2}' "${build_output_directory}/CMakeCache.txt")
 commit_sha=$(cd "${source_code_diretory}" && git rev-parse --verify HEAD --short=10)
 fdb_version=$(cat "${build_output_directory}/version.txt")
-fdb_library_versions=( '5.1.7' '6.1.13' '6.2.30' '6.3.18' "${fdb_version}" )
+fdb_library_versions=( '7.3.63' "${fdb_version}" )
 fdb_website="https://github.com/apple/foundationdb/releases/download"
 image_list=(
     'base'
-    # 'go-build'
+    'go-build'
     'foundationdb-base'
     'foundationdb'
-    # 'foundationdb-kubernetes-monitor'
+    'fdb-kubernetes-monitor'
+    'fdb-aws-s3-credentials-fetcher-sidecar'
     'foundationdb-kubernetes-sidecar'
     'ycsb'
 )
+# mako is added below once build_output_directory is finalized.
 registry=""
 tag_base="foundationdb/"
 
@@ -267,7 +276,11 @@ if [ -n "${OKTETO_NAMESPACE+x}" ]; then
     imdsv2_token=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
     aws_region=$(curl -H "X-aws-ec2-metadata-token: ${imdsv2_token}" "http://169.254.169.254/latest/meta-data/placement/region")
     aws_account_id=$(aws --output text sts get-caller-identity --query 'Account')
-    build_output_directory="${HOME}/build_output"
+    if [ "${CLANG:-0}" -eq 1 ]; then
+        build_output_directory="${HOME}/cbuild_output"
+    else
+        build_output_directory="${HOME}/build_output"
+    fi
     fdb_library_versions=( "${fdb_version}" )
     registry="${aws_account_id}.dkr.ecr.${aws_region}.amazonaws.com"
     tag_base="${registry}/foundationdb/"
@@ -278,12 +291,15 @@ if [ -n "${OKTETO_NAMESPACE+x}" ]; then
     fi
 
     # build regular images
+    if [ -x "${build_output_directory}/packages/bin/mako" ]; then
+        image_list+=( 'mako' )
+    fi
     create_fake_website_directory stripped_local
-    build_and_push_images Dockerfile true true
+    build_and_push_images true true false
 
     # build debug images
     create_fake_website_directory unstripped_local
-    build_and_push_images Dockerfile.eks true true
+    build_and_push_images true true true
 else
     echo "Dear ${USER}, you probably need to edit this file before running it. "
     echo "${0} has a very narrow set of situations where it will be successful,"
@@ -293,7 +309,6 @@ else
     # create_fake_website_directory stripped_local
     # build_and_push_images Dockerfile false false
 fi
-
 
 echo "${blue}################################################################################${reset}"
 logg "COMPLETED ${0}"

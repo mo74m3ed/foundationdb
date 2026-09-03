@@ -3,7 +3,7 @@
 #
 # This source file is part of the FoundationDB open source project
 #
-# Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+# Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,28 +20,25 @@
 
 # FoundationDB Python API
 
+import atexit
 import ctypes
 import ctypes.util
-import datetime
 import functools
 import inspect
 import multiprocessing
 import os
 import platform
+import struct
 import sys
 import threading
 import traceback
-
 import weakref
+
 import fdb
-from fdb import six
-from fdb.tuple import pack, unpack
+from fdb.tuple import int2byte
 
 from fdb import fdboptions as _opts
-import types
-import struct
 
-import atexit
 
 _network_thread = None
 _network_thread_reentrant_lock = threading.RLock()
@@ -139,7 +136,6 @@ def fill_options(scope, predicates=False):
             elif paramType == type(""):
                 f = option_wrap_string(code)
             elif paramType == type(b""):
-                # This won't happen in Python 2 because type("") == type(b""), but it will happen in Python 3
                 f = option_wrap_bytes(code)
             elif paramType == type(0):
                 f = option_wrap_int(code)
@@ -166,7 +162,6 @@ def add_operation(fname, v):
     )
     setattr(globals()["Database"], fname, f)
     setattr(globals()["Transaction"], fname, f)
-    setattr(globals()["Tenant"], fname, f)
 
 
 def fill_operations():
@@ -223,14 +218,14 @@ make_enum("ConflictRangeType")
 
 
 def transactional(*tr_args, **tr_kwargs):
-    """Decorate a funcation as transactional.
+    """Decorate a function as transactional.
 
     The decorator looks for a named argument (default "tr") and takes
     one of two actions, depending on the type of the parameter passed
     to the function at call time.
 
-    If given a Database or Tenant, a Transaction will be created and
-    passed into the wrapped code in place of the Database or Tenant.
+    If given a Database, a Transaction will be created and
+    passed into the wrapped code in place of the Database.
     After the function is complete, the newly created transaction
     will be committed.
 
@@ -547,17 +542,29 @@ class TransactionRead(_FDBBase):
             )
         )
 
-    def get_range_split_points(self, begin_key, end_key, chunk_size):
+    def get_range_split_points(self, begin_key, end_key, chunk_size, limit=-1):
         if begin_key is None or end_key is None or chunk_size <= 0:
             raise Exception("Invalid begin key, end key or chunk size")
+        if limit < 0:
+            return FutureKeyArray(
+                self.capi.fdb_transaction_get_range_split_points(
+                    self.tpointer,
+                    begin_key,
+                    len(begin_key),
+                    end_key,
+                    len(end_key),
+                    chunk_size,
+                )
+            )
         return FutureKeyArray(
-            self.capi.fdb_transaction_get_range_split_points(
+            self.capi.fdb_transaction_get_range_split_points_with_limit(
                 self.tpointer,
                 begin_key,
                 len(begin_key),
                 end_key,
                 len(end_key),
                 chunk_size,
+                limit,
             )
         )
 
@@ -1296,20 +1303,6 @@ class _TransactionCreator(_FDBBase):
         return TransactionCreator
 
 
-def process_tenant_name(name):
-    if isinstance(name, tuple):
-        return pack(name)
-    elif isinstance(name, bytes):
-        return name
-    else:
-        raise TypeError(
-            "Tenant name must be of type "
-            + bytes.__name__
-            + " or of type "
-            + tuple.__name__
-        )
-
-
 class Database(_TransactionCreator):
     def __init__(self, dpointer):
         self.dpointer = dpointer
@@ -1322,13 +1315,24 @@ class Database(_TransactionCreator):
     def _set_option(self, option, param, length):
         self.capi.fdb_database_set_option(self.dpointer, option, param, length)
 
+    # XXX Adding this back temporarily to test C bindings changes to ensure
+    # that 7.x tenant-having python libraries can pass startup with 8.0.0
+    # libfdb_c.so. Client code that actually calls tenant related APIs will
+    # of course not obtain useful functionality. Returning `None` here seems
+    # both necessary and sufficient to ensure that clients don't think that
+    # they are able to obtain tenant-related functionality.
+    #
+    # TODO(gglass): remove once we think the C library has been fixed
+    # up.  We don't want to ship this stuff in 8.0.0 python bindings
+    # as that would perpetuate these unwanted dependencies on the C
+    # library.
     def open_tenant(self, name):
-        tname = process_tenant_name(name)
+        tname = name  # this is a bug
         pointer = ctypes.c_void_p()
         self.capi.fdb_database_open_tenant(
             self.dpointer, tname, len(tname), ctypes.byref(pointer)
         )
-        return Tenant(pointer.value)
+        return None
 
     def create_transaction(self):
         pointer = ctypes.c_void_p()
@@ -1337,29 +1341,6 @@ class Database(_TransactionCreator):
 
     def get_client_status(self):
         return Key(self.capi.fdb_database_get_client_status(self.dpointer))
-
-
-class Tenant(_TransactionCreator):
-    def __init__(self, tpointer):
-        self.tpointer = tpointer
-
-    def __del__(self):
-        self.capi.fdb_tenant_destroy(self.tpointer)
-
-    def create_transaction(self):
-        pointer = ctypes.c_void_p()
-        self.capi.fdb_tenant_create_transaction(self.tpointer, ctypes.byref(pointer))
-        return Transaction(pointer.value, self)
-
-    def get_id(self):
-        return FutureInt64(self.capi.fdb_tenant_get_id(self.tpointer))
-
-    def list_blobbified_ranges(self, begin, end, limit):
-        return FutureKeyValueArray(
-            self.capi.fdb_tenant_list_blobbified_ranges(
-                self.tpointer, begin, len(begin), end, len(end), limit
-            )
-        )
 
 
 fill_operations()
@@ -1519,7 +1500,8 @@ def read_pth_file():
 
 for pth in [
     lambda: os.path.join(this_dir, capi_name),
-    # lambda: os.path.join(this_dir, "../../lib", capi_name),  # For compatibility with existing unix installation process... should be removed
+    # For compatibility with existing unix installation process... should be removed
+    # lambda: os.path.join(this_dir, "../../lib", capi_name),
     read_pth_file,
 ]:
     p = pth()
@@ -1704,6 +1686,18 @@ def init_c_api():
     _capi.fdb_database_destroy.argtypes = [ctypes.c_void_p]
     _capi.fdb_database_destroy.restype = None
 
+    # XXX Adding this back temporarily to test C bindings changes to put
+    # this stuff back in, to avoid breaking 7.x tenant-having python libraries
+    # that want to load these symbols on process startup.
+    #
+    # TODO(gglass): remove once we think the C library has been fixed
+    # up.  We don't want to ship this stuff in 8.0.0 python bindings
+    # as that would perpetuate these unwanted dependencies on the C
+    # library.  Alternatively, only initialize this stuff in a non-default
+    # mode to be used only by internal testing with the very specific
+    # goal of ensuring that the C library has symbols to satisfy
+    # 7.x python client libraries.  Like "SIMULATE_7X_PYTHON_BINDINGS"
+    # mode.
     _capi.fdb_database_open_tenant.argtypes = [
         ctypes.c_void_p,
         ctypes.c_void_p,
@@ -1822,6 +1816,17 @@ def init_c_api():
         ctypes.c_int,
     ]
     _capi.fdb_transaction_get_range_split_points.restype = ctypes.c_void_p
+
+    _capi.fdb_transaction_get_range_split_points_with_limit.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_int64,
+        ctypes.c_int,
+    ]
+    _capi.fdb_transaction_get_range_split_points_with_limit.restype = ctypes.c_void_p
 
     _capi.fdb_transaction_add_conflict_range.argtypes = [
         ctypes.c_void_p,
@@ -2171,4 +2176,4 @@ def strinc(key):
     if len(key) == 0:
         raise ValueError("Key must contain at least one byte not equal to 0xFF.")
 
-    return key[:-1] + six.int2byte(ord(key[-1:]) + 1)
+    return key[:-1] + int2byte(ord(key[-1:]) + 1)

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ struct ClientVersionRef {
 	    protocolVersion(arena, cv.protocolVersion) {}
 	ClientVersionRef(StringRef clientVersion, StringRef sourceVersion, StringRef protocolVersion)
 	  : clientVersion(clientVersion), sourceVersion(sourceVersion), protocolVersion(protocolVersion) {}
-	ClientVersionRef(StringRef versionString) {
+	explicit ClientVersionRef(StringRef versionString) {
 		std::vector<StringRef> parts = versionString.splitAny(","_sr);
 		if (parts.size() != 3) {
 			initUnknown();

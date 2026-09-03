@@ -36,7 +36,7 @@ Backup data is not encrypted at rest on disk or in a blob store account.
 Tools
 ===========
 
-There are 5 command line tools for working with Backup and DR operations:
+There are 6 command line tools for working with Backup and DR operations:
 
 ``fdbbackup``
     This command line tool is used to control (but not execute) backup jobs and manage backup data.  It can ``start``, ``modify`` or ``abort`` a backup, ``discontinue`` a continuous backup, get the ``status`` of an ongoing backup, or ``wait`` for a backup to complete.  It can also ``describe``, ``delete``, ``expire`` data in a backup, or ``list`` the backups at a destination folder URL.
@@ -48,10 +48,13 @@ There are 5 command line tools for working with Backup and DR operations:
     The backup agent is a daemon that actually executes the work of the backup and restore jobs.  Any number of backup agents pointed at the same database will cooperate to perform  backups and restores. The Backup URL specified for a backup or restore must be accessible by all ``backup_agent`` processes.
 
 ``fdbdr``
-    This command line tool is used to control (but not execute) DR jobs - backups from one database to another.  It can ``start``, ``abort`` a DR job, or ``switch`` the DR direction.  It can also get the ``status`` of a running DR job.  
+    This command line tool is used to control (but not execute) DR jobs - backups from one database to another.  It can ``start``, ``abort`` a DR job, or ``switch`` the DR direction.  It can also get the ``status`` of a running DR job.
 
 ``dr_agent``
     The database backup agent is a daemon that actually executes the work of the DR jobs, writing snapshot and log data to the destination database.  Any number of agents pointed at the same databases will cooperate to perform the backup.
+
+``fdbdecode``
+    This command line tool decodes and inspects the raw contents of a backup container.  It reads mutation log files and range snapshot files directly from a backup URL and prints their contents to stdout in hexadecimal format.  It is primarily useful for debugging backups and auditing the mutations recorded during a backup window.
 
 By default, the FoundationDB packages are configured to start a single ``backup_agent`` process on each FoundationDB server. If you want to perform a backup to a network drive or blob store instance that is accessible to every server, you can immediately use the ``fdbbackup start`` command from any machine with access to your cluster to start the backup
 
@@ -61,10 +64,12 @@ By default, the FoundationDB packages are configured to start a single ``backup_
 
 If instead you want to perform a backup to the local disk of a particular machine or machines which are not network accessible to the FoundationDB servers, then you should disable the backup agents on the FoundationDB servers. This is accomplished by commenting out all of the ``[backup_agent.<ID>]`` sections in :ref:`foundationdb.conf <foundationdb-conf>`. Do not comment out the global ``[backup_agent]`` section. Next, start backup agents on the destination machine or machines. Now, when you start a backup, you can specify the destination directory (as a Backup URL) using a local path on the destination machines. The backup agents will fetch data from the database and store it locally on the destination machines.
 
+.. _backup-urls:
+
 Backup URLs
 ===========
 
-Backup and Restore locations are specified by Backup URLs.  Currently there are two valid Backup URL formats.
+Backup and Restore locations are specified by Backup URLs.  Currently there are two valid Backup URL formats: local directories and blob store.
 
 Note that items in angle brackets (< and >) are just placeholders and must be replaced (including the brackets) with meaningful values.  Items within square brackets ([ and ]) are optional.
 
@@ -77,7 +82,7 @@ For local directories, the Backup URL format is
 An example would be ``file:///home/backups`` which would refer to the directory ``/home/backups``.
 Note that since paths must be absolute this will result in three slashes (/) in a row in the URL.
 
-Note that for local directory URLs the actual backup files will not be written to <base_dir> directly but rather to a uniquely timestamped subdirectory.  When starting a restore the path to the timestamped subdirectory must be specified.
+For local directory URLs the actual backup files will not be written to <base_dir> directly but rather to a uniquely timestamped subdirectory.  When starting a restore the path to the timestamped subdirectory must be specified.
 
 For blob store backup locations, the Backup URL format is
 
@@ -85,28 +90,30 @@ For blob store backup locations, the Backup URL format is
 
     blobstore://[<api_key>][:<secret>[:<security_token>]]@<hostname>[:<port>]/<name>?bucket=<bucket_name>[&region=<region_name>][&<param>=<value>]...]
 
-      <api_key> - API key to use for authentication. Optional.
-      <secret> - API key's secret.  Optional.
-      <security_token> - Security token if temporary credentials are used. Optional.
-      <hostname> - Remote hostname or IP address to connect to
-      <port> - Remote port to connect to.  Optional.  Default is 80.
-      <name> - Name of the backup within the backup bucket.  It can contain '/' characters in order to organize backups into a folder-like structure.
-      <bucket_name> - Name of the bucket to use for backup data.
-      <region_name> - If <hostname> is not in s3 compatible form (s3.region-name.example.com) and aws v4 signature is enabled, region name is required.
-      
-      <param>=<value> - Optional URL parameters.  See below for details.
+      <api_key>         API key to use for authentication. If S3, it is AWS_ACCESS_KEY_ID. Optional.
+      <secret>          API key's secret.  If S3, it is AWS_SECRET_ACCESS_KEY. Optional.
+      <security_token>  Security token if temporary credentials are used. If S3, it is AWS_SESSION_TOKEN. Optional.
+      <hostname>        Remote hostname or IP address to connect to
+      <port>            Remote port to connect to.  Optional.  Default is 80.
+      <name>            Name of the backup within the backup bucket.  It can contain '/' characters in order to organize backups into a folder-like structure.
+      <bucket_name>     Name of the bucket to use for backup data.
+      <region_name>     If <hostname> is not in s3 compatible form (s3.region-name.example.com) and aws v4 signature is enabled, region name is required.
+      <param>=<value>   Optional URL parameters.  See below for details.
 
 A single bucket (specified by <bucket_name>) can hold any number of backups, each with a different <name>.
 
-If <secret> is not specified, it will be looked up in :ref:`blob credential sources<blob-credential-files>`.
+If <secret> is not specified on the URL, it will be looked up in :ref:`blob credential sources<blob-credential-files>`.
 
 An example blob store Backup URL would be ``blobstore://myKey:mySecret@something.domain.com:80/dec_1_2017_0400?bucket=backups``.
+If S3 is the target blobstore, the URL would look like: ``blobstore://${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}:${AWS_SESSION_TOKEN}@backup-12345-us-west-2.s3.amazonaws.com/dailies?bucket=backup-12345-us-west-2&region=us-west-2``
+The <secret> and <security_token> may be omitted from the URL and instead picked up from :ref:`blob credential sources<blob-credential-files>`: ``blobstore://${AWS_ACCESS_KEY_ID}@backup-12345-us-west-2.s3.amazonaws.com/dailies?bucket=backup-12345-us-west-2&region=us-west-2``
+To pickup the <api_key>, <secret>, and <security_token> from :ref:`blob credentials file<blob-credential-files>`, write the blob backup URL as: ``blobstore://@backup-12345-us-west-2.s3.amazonaws.com/dailies?bucket=backup-12345-us-west-2&region=us-west-2`` (Notice the '@' in front of the hostname).
 
-Blob store Backup URLs can have optional parameters at the end which set various limits or options used when communicating with the store.  All values must be positive decimal integers unless otherwise specified.  The speed related default values are not very restrictive.  The most likely parameter a user would want to change is ``max_send_bytes_per_second`` (or ``sbps`` for short) which determines the upload speed to the blob service.
+Blob store Backup URLs can have optional parameters at the end which set various limits or options used when communicating with the store.  All values must be positive decimal integers unless otherwise specified.  The speed related default values are not very restrictive. A parameter is applied individually on each ``backup_agent``, meaning that a global restriction should be calculated based on the number of agent running. The most likely parameter a user would want to change is ``max_send_bytes_per_second`` (or ``sbps`` for short) which determines the upload speed to the blob service. 
 
 Here is a complete list of valid parameters:
 
- *secure_connection* (or *sc*) - Set 1 for secure connection and 0 for unsecure connection. Defaults to secure connection.
+ *secure_connection* (or *sc*) - Set 1 for secure connection and 0 for insecure connection. Defaults to secure connection.
 
  *connect_tries* (or *ct*) - Number of times to try to connect for each request.
 
@@ -154,6 +161,10 @@ Here is a complete list of valid parameters:
 
  *max_recv_bytes_per_second* (or *rbps*) - Max receive bytes per second for all requests combined.
 
+ *max_delay_retryable_error (or *dre*) - Max seconds to delay before retry again when seeing an retryable error.
+
+ *max_delay_connection_failed (or *dcf*) - Max seconds to delay before retry again when seeing an connection failure.
+
  *header* - Add an additional HTTP header to each blob store REST API request.  Can be specified multiple times.  Format is *header=<FieldName>:<FieldValue>* where both strings are non-empty.
 
  *sdk_auth* (or *sa*) - Use the AWS SDK to do credentials and authentication. This supports all aws authentication types, including credential-less iam role-based authentication in aws. Experimental, and only works if FDB was compiled with BUILD_AWS_BACKUP=ON. When this parameter is set, all other credential parts of the backup url can be ignored.
@@ -171,9 +182,12 @@ If the knob is set to ``true`` then v4 signature will be used and if set to ``fa
 Blob Credential Files
 ==============================
 
-In order to help safeguard blob store credentials, the <SECRET> can optionally be omitted from blobstore:// URLs on the command line.  Omitted secrets will be resolved at connect time using 1 or more Blob Credential files.
+In order to help safeguard blob store credentials, the <secret> can optionally be omitted from ``blobstore://`` URLs on the command line.
+Omitted secrets will be resolved at connect time using 1 or more Blob Credential files
+(In fact, the <api_key>, <secret>, and <security_token> may all be omitted from the backup URL and instead read from the credential file;
+for how to write the backup URL in this case see :ref:`backup URLs<backup-urls>`).
 
-Blob Credential files can be specified on the command line (via --blob-credentials <FILE>) or via the environment variable FDB_BLOB_CREDENTIALS which can be set to a colon-separated list of files.  The command line takes priority over the environment variable however all files from both sources will be used.
+Blob Credential files can be specified on the command line (via ``--blob-credentials <FILE>``) or via the environment variable ``FDB_BLOB_CREDENTIALS`` which can be set to a colon-separated list of files.  The command line takes priority over the environment variable however all files from both sources will be used.
 
 At connect time, the specified files are read in order and the first matching account specification (user@host)
 will be used to obtain the secret key.
@@ -195,8 +209,22 @@ If temporary credentials are being used, the following schema is also supported
 
   {
     "accounts" : {
-      "@host" :     { "api_key" : user, "secret" : "SECRETKEY", token: "TOKEN1" },
-      "@host2" :    { "api_key" : user2, "secret" : "SECRETKEY2", token: "TOKEN2" }
+      "@host" :     { "api_key" : user, "secret" : "SECRETKEY", "token": "TOKEN1" },
+      "@host2" :    { "api_key" : user2, "secret" : "SECRETKEY2", "token": "TOKEN2" }
+    }
+  }
+
+For example:
+
+::
+
+  {
+    "accounts": {
+      "@backup-12345-us-west-2.s3.amazonaws.com": {
+        "api_key": "AWS_ACCESS_KEY_ID",
+        "secret": "AWS_SECRET_ACCESS_KEY",
+        "token": "AWS_SESSION_TOKEN"
+      }
     }
   }
 
@@ -259,7 +287,7 @@ The ``start`` subcommand is used to start a backup.  If there is already a backu
 
 ::
 
-   user@host$ fdbbackup start [-t <TAG>] -d <BACKUP_URL> [-z] [-s <DURATION>] [--partitioned-log-experimental] [-w] [-k '<BEGIN>[ <END>]']...
+   user@host$ fdbbackup start [-t <TAG>] -d <BACKUP_URL> [-z] [-s <DURATION>] [--mutation-log-type partitioned-log-experimental] [-w] [-k '<BEGIN>[ <END>]']...
 
 ``-z``
   Perform the backup continuously rather than terminating once a restorable backup is achieved.  Database mutations within the backup's target key ranges will be continuously written to the backup as well as repeated inconsistent snapshots at the configured snapshot rate.
@@ -270,7 +298,7 @@ The ``start`` subcommand is used to start a backup.  If there is already a backu
 ``--initial-snapshot-interval <DURATION>``  
   Specifies the duration, in seconds, of the first inconsistent snapshot written to the backup.  The default is 0, which means as fast as possible.
 
-``--partitioned-log-experimental``
+``--mutation-log-type partitioned-log-experimental``
   Specifies the backup uses the partitioned mutation logs generated by backup workers. Since FDB version 6.3, this option is experimental and requires using fast restore for restoring the database from the generated files. The default is to use non-partitioned mutation logs generated by backup agents.
 
 ``-w``
@@ -663,3 +691,165 @@ Unlike ``backup_agent``, ``dr_agent`` is not started automatically in a default 
 
 ``-s <CLUSTER_FILE>``
   Specify the path to the ``fdb.cluster`` file for the source cluster of the DR operation.
+
+.. _fdbdecode-intro:
+
+``fdbdecode`` command line tool
+================================
+
+.. program:: fdbdecode
+
+``fdbdecode`` reads backup files directly from a backup container and prints their decoded contents to stdout.  It is a diagnostic and inspection tool — it does not modify any data.  Its output is useful for auditing which mutations were captured in a backup, verifying backup contents after an incident, or troubleshooting backup and restore issues.
+
+There are two kinds of files in a FoundationDB backup:
+
+* **Mutation log files** record every individual mutation (set, clear, atomic operation) that occurred in the database during the backup window, grouped by version.
+* **Range snapshot files** record a point-in-time snapshot of the full key-value state for a key range at a specific version.
+
+``fdbdecode`` can decode either or both file types from the same container in a single invocation.
+
+Output format
+-------------
+
+For each mutation in a log file, one line is printed per mutation::
+
+    <version>.<subsequence> <mutation_type> param1: <hex_key> param2: <hex_value>
+
+For each key-value pair in a range snapshot file, one line is printed::
+
+    <version> key: <hex_key>  value: <hex_value>
+
+All keys and values are printed as hexadecimal strings.  The backup description (version range, restorable versions, etc.) is also printed before the file contents.
+
+.. note::
+
+   **Range snapshot files do not all share the same version.**
+
+   A FoundationDB backup snapshot is *inconsistent*: different key ranges (shards) are read at different FDB versions spread across the snapshot window (``snapshotBeginVersion`` to ``snapshotTargetEndVersion``).  Each range file covers exactly one shard and all key-value pairs within it are read in a single transaction at one specific version, but that version differs between files covering different shards.
+
+   As a result:
+
+   * The ``<version>`` prefix in range file output is the **shard read version** — the version at which that entire shard was fetched — not the version at which each individual key was last written.
+   * Two keys that appear in different range files may carry different version numbers even though they were both captured in the same logical snapshot.
+   * Range file output alone does **not** represent a consistent point-in-time view of the database.  To reconstruct the database state at any specific version you must combine the range files with the mutation log files: the log files record every mutation between ``snapshotBeginVersion`` and the restore target, allowing each shard to be "rolled forward" to a common consistent version.
+   * The ``--begin-version-filter`` and ``--end-version-filter`` options filter range files by their shard read version (one version per file), **not** by the write version of individual keys.  A key whose shard was read at version 1,500,000 will be excluded if you filter ``--end-version-filter 1,000,000``, even if the key itself was written long before that.
+
+   Mutation log files do not have this ambiguity: every mutation is stamped with the exact FDB commit version at which it was written.
+
+Basic usage
+-----------
+
+::
+
+    user@host$ fdbdecode -r <BACKUP_URL> [OPTIONS]
+
+Required options
+^^^^^^^^^^^^^^^^
+
+``-r <BACKUP_URL>`` or ``--container <BACKUP_URL>``
+  The :ref:`Backup URL <backup-urls>` of the backup container to decode.  Supports the same URL formats as ``fdbbackup`` (``file://``, ``blobstore://``, etc.).
+
+File selection options
+^^^^^^^^^^^^^^^^^^^^^^
+
+``-t [log|range|both]`` or ``--file-type [log|range|both]``
+  Selects which type of backup file to decode.  ``log`` decodes only mutation log files, ``range`` decodes only range snapshot files, and ``both`` (the default) decodes both.
+
+``-i <PATTERN>`` or ``--input <PATTERN>``
+  Restricts decoding to files whose names contain ``<PATTERN>``.  Useful for narrowing to a specific file or subset of files within a large backup.
+
+``--list-only``
+  Prints the list of matching files and then exits without decoding any file contents.
+
+Filtering options
+^^^^^^^^^^^^^^^^^
+
+``-k <KEY_PREFIX>``
+  Only output mutations and key-value pairs whose key starts with ``<KEY_PREFIX>``.  The prefix is interpreted as a raw byte string.  Can be specified multiple times to filter on multiple prefixes.
+
+``--hex-prefix <HEX_PREFIX>``
+  Same as ``-k`` but the prefix is given in hexadecimal escape notation, for example ``--hex-prefix "\\x05\\x01"``.
+
+``--filters <PREFIX_FILTER_FILE>``
+  Path to a file containing one or more key prefixes in hexadecimal format, separated by ``;`` (semicolons can be escaped as ``\;``).  For example, the file might contain ``\\x05\\x01;\\x15\\x2b``.  All prefixes in the file are applied as an OR filter — a mutation is printed if its key matches any of them.
+
+``--begin-version-filter <VERSION>``
+  Only output mutations at or after ``<VERSION>`` (inclusive).
+
+``--end-version-filter <VERSION>``
+  Only output mutations before ``<VERSION>`` (exclusive).
+
+Encryption and credentials
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``--encryption-key-file <FILE>``
+  Path to an AES-128-GCM encryption key file.  Required when decoding an encrypted backup.
+
+``--blob-credentials <FILE>``
+  Path to a :ref:`Blob Credential File <blob-credential-files>` for accessing a blobstore backup container.
+
+Local file caching
+^^^^^^^^^^^^^^^^^^
+
+``-s`` or ``--save``
+  Save a local copy of each downloaded backup file into the current directory (mirroring the container's directory structure).  By default downloaded files are not saved.
+
+Trace logging options
+^^^^^^^^^^^^^^^^^^^^^
+
+``--log``
+  Enable trace file logging for the session.
+
+``--logdir <PATH>``
+  Directory for trace files.  Defaults to the current directory.  Has no effect unless ``--log`` is specified.
+
+``--loggroup <LOG_GROUP>``
+  Sets the ``LogGroup`` field for all trace events.  Defaults to ``default``.
+
+``--trace-format [xml|json]``
+  Format for trace files.  Defaults to ``json``.  Has no effect unless ``--log`` is specified.
+
+Miscellaneous options
+^^^^^^^^^^^^^^^^^^^^^
+
+``--crash``
+  Crash the process on a serious error instead of returning an error code.
+
+``--build-flags``
+  Print build information (version, compile-time flags) and exit.
+
+``--validate-filters``
+  Cross-check the fast ``RangeMap``-based prefix filter against a slower linear scan and assert that both produce identical results.  Intended for development and testing.
+
+``--knob-<KNOBNAME> <VALUE>``
+  Override an internal knob at runtime.  ``<KNOBNAME>`` must be lowercase.
+
+TLS options
+^^^^^^^^^^^
+
+In-flight traffic to a blobstore or DR backup can be encrypted.  See :ref:`TLS Support <enable-TLS>` for details.  The relevant flags are ``--tls-certificate-file``, ``--tls-key-file``, ``--tls-password``, ``--tls-ca-file``, and ``--tls-verify-peers``.
+
+Examples
+--------
+
+List all files in a local backup without decoding::
+
+    user@host$ fdbdecode -r file:///path/to/backup --list-only
+
+Decode all mutation log files from a local backup::
+
+    user@host$ fdbdecode -r file:///path/to/backup -t log
+
+Decode all log and range files, filtering to a specific key prefix::
+
+    user@host$ fdbdecode -r file:///path/to/backup --hex-prefix "\\x05\\x01"
+
+Decode mutations in a specific version window::
+
+    user@host$ fdbdecode -r file:///path/to/backup -t log \
+        --begin-version-filter 1000000 --end-version-filter 2000000
+
+Decode a blobstore backup with saved local copies and trace logging::
+
+    user@host$ fdbdecode -r blobstore://key:secret@s3.example.com/mybackup?bucket=mybucket \
+        -s --log --logdir /tmp/traces

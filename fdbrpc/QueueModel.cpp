@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,20 +58,6 @@ double QueueModel::addRequest(uint64_t id) {
 	auto& d = data[id];
 	d.smoothOutstanding.addDelta(d.penalty);
 	return d.penalty;
-}
-
-void QueueModel::updateTssEndpoint(uint64_t endpointId, const TSSEndpointData& tssData) {
-	auto& d = data[endpointId];
-	d.tssData = tssData;
-}
-
-void QueueModel::removeTssEndpoint(uint64_t endpointId) {
-	auto& d = data[endpointId];
-	d.tssData = Optional<TSSEndpointData>();
-}
-
-Optional<TSSEndpointData> QueueModel::getTssData(uint64_t id) {
-	return data[id].tssData;
 }
 
 Optional<LoadBalancedReply> getLoadBalancedReply(const LoadBalancedReply* reply) {

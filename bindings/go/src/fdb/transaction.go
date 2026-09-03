@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@
 
 package fdb
 
-// #define FDB_API_VERSION 710300
+// #define FDB_API_VERSION 800
 // #include <foundationdb/fdb_c.h>
 import "C"
 
@@ -41,7 +41,9 @@ type ReadTransaction interface {
 	Snapshot() Snapshot
 	GetEstimatedRangeSizeBytes(r ExactRange) FutureInt64
 	GetRangeSplitPoints(r ExactRange, chunkSize int64) FutureKeyArray
+	GetRangeSplitPointsWithLimit(r ExactRange, chunkSize int64, limit int) FutureKeyArray
 	Options() TransactionOptions
+	Cancel()
 
 	ReadTransactor
 }
@@ -91,6 +93,10 @@ func (t *transaction) destroy() {
 	C.fdb_transaction_destroy(t.ptr)
 }
 
+func (t *transaction) cancel() {
+	C.fdb_transaction_cancel(t.ptr)
+}
+
 // GetDatabase returns a handle to the database with which this transaction is
 // interacting.
 func (t Transaction) GetDatabase() Database {
@@ -111,10 +117,10 @@ func (t Transaction) GetDatabase() Database {
 //
 // See the Transactor interface for an example of using Transact with
 // Transaction and Database objects.
-func (t Transaction) Transact(f func(Transaction) (interface{}, error)) (r interface{}, e error) {
-	defer panicToError(&e)
+func (t Transaction) Transact(f func(Transaction) (interface{}, error)) (r interface{}, err error) {
+	defer panicToError(&err)
 
-	r, e = f(t)
+	r, err = f(t)
 	return
 }
 
@@ -131,10 +137,10 @@ func (t Transaction) Transact(f func(Transaction) (interface{}, error)) (r inter
 //
 // See the ReadTransactor interface for an example of using ReadTransact with
 // Transaction, Snapshot and Database objects.
-func (t Transaction) ReadTransact(f func(ReadTransaction) (interface{}, error)) (r interface{}, e error) {
-	defer panicToError(&e)
+func (t Transaction) ReadTransact(f func(ReadTransaction) (interface{}, error)) (r interface{}, err error) {
+	defer panicToError(&err)
 
-	r, e = f(t)
+	r, err = f(t)
 	return
 }
 
@@ -155,7 +161,7 @@ func (t Transaction) ReadTransact(f func(ReadTransaction) (interface{}, error)) 
 // error, the commit may have occurred or may occur in the future. This can make
 // it more difficult to reason about the order in which transactions occur.
 func (t Transaction) Cancel() {
-	C.fdb_transaction_cancel(t.ptr)
+	t.transaction.cancel()
 }
 
 // (Infrequently used) SetReadVersion sets the database version that the transaction will read from
@@ -184,9 +190,9 @@ func (t Transaction) Snapshot() Snapshot {
 //
 // Typical code will not use OnError directly. (Database).Transact uses
 // OnError internally to implement a correct retry loop.
-func (t Transaction) OnError(e Error) FutureNil {
+func (t Transaction) OnError(err Error) FutureNil {
 	return &futureNil{
-		future: newFuture(C.fdb_transaction_on_error(t.ptr, C.fdb_error_t(e.Code))),
+		future: newFuture(t.transaction, C.fdb_transaction_on_error(t.ptr, C.fdb_error_t(err.Code))),
 	}
 }
 
@@ -202,7 +208,7 @@ func (t Transaction) OnError(e Error) FutureNil {
 // https://apple.github.io/foundationdb/developer-guide.html#transactions-with-unknown-results.
 func (t Transaction) Commit() FutureNil {
 	return &futureNil{
-		future: newFuture(C.fdb_transaction_commit(t.ptr)),
+		future: newFuture(t.transaction, C.fdb_transaction_commit(t.ptr)),
 	}
 }
 
@@ -238,13 +244,13 @@ func (t Transaction) Commit() FutureNil {
 func (t Transaction) Watch(key KeyConvertible) FutureNil {
 	kb := key.FDBKey()
 	return &futureNil{
-		future: newFuture(C.fdb_transaction_watch(t.ptr, byteSliceToPtr(kb), C.int(len(kb)))),
+		future: newFuture(t.transaction, C.fdb_transaction_watch(t.ptr, byteSliceToPtr(kb), C.int(len(kb)))),
 	}
 }
 
 func (t *transaction) get(key []byte, snapshot int) FutureByteSlice {
 	return &futureByteSlice{
-		future: newFuture(C.fdb_transaction_get(
+		future: newFuture(t, C.fdb_transaction_get(
 			t.ptr,
 			byteSliceToPtr(key),
 			C.int(len(key)),
@@ -268,7 +274,7 @@ func (t *transaction) doGetRange(r Range, options RangeOptions, snapshot bool, i
 	ekey := esel.Key.FDBKey()
 
 	return futureKeyValueArray{
-		future: newFuture(C.fdb_transaction_get_range(
+		future: newFuture(t, C.fdb_transaction_get_range(
 			t.ptr,
 			byteSliceToPtr(bkey),
 			C.int(len(bkey)),
@@ -310,7 +316,7 @@ func (t Transaction) GetRange(r Range, options RangeOptions) RangeResult {
 
 func (t *transaction) getEstimatedRangeSizeBytes(beginKey Key, endKey Key) FutureInt64 {
 	return &futureInt64{
-		future: newFuture(C.fdb_transaction_get_estimated_range_size_bytes(
+		future: newFuture(t, C.fdb_transaction_get_estimated_range_size_bytes(
 			t.ptr,
 			byteSliceToPtr(beginKey),
 			C.int(len(beginKey)),
@@ -338,13 +344,27 @@ func (t Transaction) GetEstimatedRangeSizeBytes(r ExactRange) FutureInt64 {
 
 func (t *transaction) getRangeSplitPoints(beginKey Key, endKey Key, chunkSize int64) FutureKeyArray {
 	return &futureKeyArray{
-		future: newFuture(C.fdb_transaction_get_range_split_points(
+		future: newFuture(t, C.fdb_transaction_get_range_split_points(
 			t.ptr,
 			byteSliceToPtr(beginKey),
 			C.int(len(beginKey)),
 			byteSliceToPtr(endKey),
 			C.int(len(endKey)),
 			C.int64_t(chunkSize),
+		)),
+	}
+}
+
+func (t *transaction) getRangeSplitPointsWithLimit(beginKey Key, endKey Key, chunkSize int64, limit int) FutureKeyArray {
+	return &futureKeyArray{
+		future: newFuture(t, C.fdb_transaction_get_range_split_points_with_limit(
+			t.ptr,
+			byteSliceToPtr(beginKey),
+			C.int(len(beginKey)),
+			byteSliceToPtr(endKey),
+			C.int(len(endKey)),
+			C.int64_t(chunkSize),
+			C.int(limit),
 		)),
 	}
 }
@@ -361,9 +381,21 @@ func (t Transaction) GetRangeSplitPoints(r ExactRange, chunkSize int64) FutureKe
 	)
 }
 
+// GetRangeSplitPointsWithLimit returns at most limit interior split points, including shard boundaries.
+// The start and end keys of the given range are always included.
+func (t Transaction) GetRangeSplitPointsWithLimit(r ExactRange, chunkSize int64, limit int) FutureKeyArray {
+	beginKey, endKey := r.FDBRangeKeys()
+	return t.getRangeSplitPointsWithLimit(
+		beginKey.FDBKey(),
+		endKey.FDBKey(),
+		chunkSize,
+		limit,
+	)
+}
+
 func (t *transaction) getReadVersion() FutureInt64 {
 	return &futureInt64{
-		future: newFuture(C.fdb_transaction_get_read_version(t.ptr)),
+		future: newFuture(t, C.fdb_transaction_get_read_version(t.ptr)),
 	}
 }
 
@@ -430,12 +462,12 @@ func (t Transaction) GetCommittedVersion() (int64, error) {
 // mind that a transaction which reads keys and then sets them to their current
 // values may be optimized to a read-only transaction.
 func (t Transaction) GetVersionstamp() FutureKey {
-	return &futureKey{future: newFuture(C.fdb_transaction_get_versionstamp(t.ptr))}
+	return &futureKey{future: newFuture(t.transaction, C.fdb_transaction_get_versionstamp(t.ptr))}
 }
 
 func (t *transaction) getApproximateSize() FutureInt64 {
 	return &futureInt64{
-		future: newFuture(C.fdb_transaction_get_approximate_size(t.ptr)),
+		future: newFuture(t, C.fdb_transaction_get_approximate_size(t.ptr)),
 	}
 }
 
@@ -463,7 +495,7 @@ func boolToInt(b bool) int {
 func (t *transaction) getKey(sel KeySelector, snapshot int) FutureKey {
 	key := sel.Key.FDBKey()
 	return &futureKey{
-		future: newFuture(C.fdb_transaction_get_key(
+		future: newFuture(t, C.fdb_transaction_get_key(
 			t.ptr,
 			byteSliceToPtr(key),
 			C.int(len(key)),
@@ -582,7 +614,7 @@ func (t Transaction) Options() TransactionOptions {
 func localityGetAddressesForKey(t *transaction, key KeyConvertible) FutureStringSlice {
 	kb := key.FDBKey()
 	return &futureStringSlice{
-		future: newFuture(C.fdb_transaction_get_addresses_for_key(
+		future: newFuture(t, C.fdb_transaction_get_addresses_for_key(
 			t.ptr,
 			byteSliceToPtr(kb),
 			C.int(len(kb)),

@@ -10,7 +10,7 @@ Rigorous testing is central to our engineering process. The :doc:`features of ou
 Simulation
 ==========
 
-Simulation is a powerful tool for testing system correctness. Our simulation technology, called Simulation, is enabled by and tightly integrated with :doc:`flow`, our programming language for actor-based concurrency. In addition to generating efficient production code, Flow works with Simulation for simulated execution.
+Simulation is a powerful tool for testing system correctness. Our simulation technology, called Simulation, is enabled by and tightly integrated with :doc:`flow`, our asynchronous runtime for C++ coroutines. Flow supports both production execution and deterministic simulated execution.
 
 The major goal of Simulation is to make sure that we find and diagnose issues in simulation rather than the real world. Simulation runs tens of thousands of simulations every night, each one simulating large numbers of component failures. Based on the volume of tests that we run and the increased intensity of the failures in our scenarios, we estimate that we have run the equivalent of roughly one trillion CPU-hours of simulation on FoundationDB.
 
@@ -25,6 +25,17 @@ We use Simulation to simulate failures modes at the network, machine, and datace
 For a while, there was an informal competition within the engineering team to design failures that found the toughest bugs and issues the most easily. After a period of one-upsmanship, the reigning champion is called "swizzle-clogging". To swizzle-clog, you first pick a random subset of nodes in the cluster. Then, you "clog" (stop) each of their network connections one by one over a few seconds. Finally, you unclog them in a random order, again one by one, until they are all up. This pattern seems to be particularly good at finding deep issues that only happen in the rarest real-world cases.
 
 Simulation's success has surpassed our expectation and has been vital to our engineering team. It seems unlikely that we would have been able to build FoundationDB without this technology.
+
+Running unit tests in simulation
+--------------------------------
+
+Several standalone unit-test binaries can also run their tests under Simulation. The ``fdbclient_test``, ``fdbrpc_test``, and ``fdbserver_*_test`` targets support the ``--simulation`` flag. For example:
+
+.. code-block:: bash
+
+   ./bin/fdbclient_test --simulation
+
+Without an explicit test filter, simulation mode skips ``noSim/...``, incompatible ``/fdbrpc/grpc``, and opt-in performance or long-running correctness tests. Normal mode skips standalone-incompatible gRPC and simulation-only HTTP-server, mock-DNS, external-client, and file-shutdown tests, tests requiring an external backup URL, and opt-in performance or long-running correctness tests. An explicit ``--filter`` can still select any of these tests. The ``flow_test`` target does not support simulation because it is not linked with simulator support.
 
 Performance testing with Circus
 ===============================

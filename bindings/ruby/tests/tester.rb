@@ -6,7 +6,7 @@
 #
 # This source file is part of the FoundationDB open source project
 #
-# Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+# Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -321,7 +321,7 @@ class Tester
           inst.tr.get_estimated_range_size_bytes(inst.wait_and_pop, inst.wait_and_pop).to_i
           inst.push("GOT_ESTIMATED_RANGE_SIZE")
         when "GET_RANGE_SPLIT_POINTS"
-          inst.tr.get_range_split_points(inst.wait_and_pop, inst.wait_and_pop, inst.wait_and_pop).length()
+          inst.tr.get_range_split_points(inst.wait_and_pop, inst.wait_and_pop, inst.wait_and_pop).wait()
           inst.push("GOT_RANGE_SPLIT_POINTS")
         when "GET_KEY"
           selector = FDB::KeySelector.new(inst.wait_and_pop, inst.wait_and_pop, inst.wait_and_pop)

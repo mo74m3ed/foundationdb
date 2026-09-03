@@ -36,6 +36,8 @@ DAMAGE.
 The views and conclusions contained in the software and documentation are those of the authors and should not be
 interpreted as representing official policies, either expressed or implied, of Dmitry Vyukov.*/
 
+#pragma once
+
 #include <atomic>
 
 #if VALGRIND
@@ -51,8 +53,8 @@ class ThreadSafeQueue : NonCopyable {
 
 	struct Node : BaseNode, FastAllocated<Node> {
 		T data;
-		Node(T const& data) : data(data) {}
-		Node(T&& data) : data(std::move(data)) {}
+		explicit Node(T const& data) : data(data) {}
+		explicit Node(T&& data) : data(std::move(data)) {}
 	};
 	std::atomic<BaseNode*> head;
 	BaseNode* tail;

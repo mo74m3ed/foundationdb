@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -171,7 +171,7 @@ fdb::KeyRange ApiWorkload::randomNonEmptyKeyRange() {
 }
 
 std::optional<int> ApiWorkload::randomTenant() {
-	if (tenants.size() > 0) {
+	if (!tenants.empty()) {
 		return Random::get().randomInt(0, tenants.size() - 1);
 	} else {
 		return {};
@@ -243,35 +243,16 @@ void ApiWorkload::populateTenantData(TTaskFct cont, std::optional<int> tenantId)
 	}
 }
 
-void ApiWorkload::createTenants(TTaskFct cont) {
-	execTransaction(
-	    [this](auto ctx) {
-		    auto futures = std::make_shared<std::vector<fdb::Future>>();
-		    for (auto tenant : tenants) {
-			    futures->push_back(fdb::Tenant::getTenant(ctx->tx(), tenant));
-		    }
-		    ctx->continueAfterAll(*futures, [this, ctx, futures]() {
-			    for (int i = 0; i < futures->size(); ++i) {
-				    if (!(*futures)[i].get<fdb::future_var::ValueRef>()) {
-					    fdb::Tenant::createTenant(ctx->tx(), tenants[i]);
-				    }
-			    }
-			    ctx->commit();
-		    });
-	    },
-	    [this, cont]() { schedule(cont); });
-}
-
 void ApiWorkload::createTenantsIfNecessary(TTaskFct cont) {
-	if (tenants.size() > 0) {
-		createTenants(cont);
+	if (!tenants.empty()) {
+		ASSERT(false);
 	} else {
 		schedule(cont);
 	}
 }
 
 void ApiWorkload::populateData(TTaskFct cont) {
-	if (tenants.size() > 0) {
+	if (!tenants.empty()) {
 		populateTenantData(cont, std::make_optional(0));
 	} else {
 		populateTenantData(cont, {});
@@ -357,52 +338,6 @@ std::optional<fdb::BytesRef> ApiWorkload::getTenant(std::optional<int> tenantId)
 
 std::string ApiWorkload::debugTenantStr(std::optional<int> tenantId) {
 	return tenantId.has_value() ? fmt::format("(tenant {0})", tenantId.value()) : "()";
-}
-
-// BlobGranule setup.
-// This blobbifies ['\x00', '\xff') per tenant or for the whole database if there are no tenants.
-void ApiWorkload::setupBlobGranules(TTaskFct cont) {
-	// This count is used to synchronize the # of tenant blobbifyRange() calls to ensure
-	// we only start the workload once blobbification has fully finished.
-	auto blobbifiedCount = std::make_shared<std::atomic<int>>(1);
-
-	if (tenants.empty()) {
-		blobbifiedCount->store(1);
-		blobbifyTenant({}, blobbifiedCount, cont);
-	} else {
-		blobbifiedCount->store(tenants.size());
-		for (int i = 0; i < tenants.size(); i++) {
-			schedule([=]() { blobbifyTenant(i, blobbifiedCount, cont); });
-		}
-	}
-}
-
-void ApiWorkload::blobbifyTenant(std::optional<int> tenantId,
-                                 std::shared_ptr<std::atomic<int>> blobbifiedCount,
-                                 TTaskFct cont) {
-	execOperation(
-	    [=](auto ctx) {
-		    fdb::Key begin(1, '\x00');
-		    fdb::Key end(1, '\xff');
-
-		    info(fmt::format("setup: blobbifying {}: [\\x00 - \\xff)\n", debugTenantStr(tenantId)));
-
-		    // wait for blobbification before returning
-		    fdb::Future f = ctx->dbOps()->blobbifyRangeBlocking(begin, end).eraseType();
-		    ctx->continueAfter(f, [ctx, f]() {
-			    bool success = f.get<fdb::future_var::Bool>();
-			    ASSERT(success);
-			    ctx->done();
-		    });
-	    },
-	    [=]() {
-		    info(fmt::format("setup: blobbify done {}: [\\x00 - \\xff)\n", debugTenantStr(tenantId)));
-		    if (blobbifiedCount->fetch_sub(1) == 1) {
-			    schedule(cont);
-		    }
-	    },
-	    /*tenant=*/getTenant(tenantId),
-	    /* failOnError = */ false);
 }
 
 } // namespace FdbApiTester

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,25 +24,27 @@
 #include "flow/ApiVersion.h"
 #include "flow/FastAlloc.h"
 #include "flow/FastRef.h"
-#include "fdbclient/GlobalConfig.actor.h"
+#include "fdbclient/GlobalConfig.h"
 #include "fdbclient/StorageServerInterface.h"
 #include "flow/IRandom.h"
-#include "flow/genericactors.actor.h"
+#include "flow/genericactors.h"
+#include <compare>
 #include <vector>
 #include <unordered_map>
 #pragma once
 
 #include "fdbclient/FDBTypes.h"
-#include "fdbclient/NativeAPI.actor.h"
+#include "fdbclient/NativeAPI.h"
 #include "fdbclient/KeyRangeMap.h"
 #include "fdbclient/CommitProxyInterface.h"
-#include "fdbclient/SpecialKeySpace.actor.h"
+#include "fdbclient/ProxyLoadBalanceMetrics.h"
+#include "fdbclient/SpecialKeySpace.h"
 #include "fdbclient/VersionVector.h"
 #include "fdbclient/IKeyValueStore.actor.h"
 #include "fdbrpc/QueueModel.h"
 #include "fdbrpc/MultiInterface.h"
-#include "flow/TDMetric.actor.h"
-#include "fdbclient/EventTypes.actor.h"
+#include "flow/TDMetric.h"
+#include "fdbclient/EventTypes.h"
 #include "fdbrpc/Smoother.h"
 #include "fdbrpc/DDSketch.h"
 
@@ -65,18 +67,15 @@ struct LocationInfo : MultiInterface<ReferencedInterface<StorageServerInterface>
 	using Locations = MultiInterface<ReferencedInterface<StorageServerInterface>>;
 	explicit LocationInfo(const std::vector<Reference<ReferencedInterface<StorageServerInterface>>>& v)
 	  : Locations(v) {}
-	LocationInfo(const std::vector<Reference<ReferencedInterface<StorageServerInterface>>>& v, bool hasCaches)
-	  : Locations(v), hasCaches(hasCaches) {}
 	LocationInfo(const LocationInfo&) = delete;
 	LocationInfo(LocationInfo&&) = delete;
 	LocationInfo& operator=(const LocationInfo&) = delete;
 	LocationInfo& operator=(LocationInfo&&) = delete;
-	bool hasCaches = false;
 	Reference<Locations> locations() { return Reference<Locations>::addRef(this); }
 };
 
-using CommitProxyInfo = ModelInterface<CommitProxyInterface>;
-using GrvProxyInfo = ModelInterface<GrvProxyInterface>;
+using CommitProxyInfo = ModelInterface<CommitProxyInterface, ProxyCpuMetric>;
+using GrvProxyInfo = ModelInterface<GrvProxyInterface, ProxyGrvMetric>;
 
 class ClientTagThrottleData : NonCopyable {
 private:
@@ -89,7 +88,7 @@ private:
 	Smoother smoothReleased;
 
 public:
-	ClientTagThrottleData(ClientTagThrottleLimits const& limits)
+	explicit ClientTagThrottleData(ClientTagThrottleLimits const& limits)
 	  : tpsRate(limits.tpsRate), expiration(limits.expiration), lastCheck(now()),
 	    smoothRate(CLIENT_KNOBS->TAG_THROTTLE_SMOOTHING_WINDOW),
 	    smoothReleased(CLIENT_KNOBS->TAG_THROTTLE_SMOOTHING_WINDOW) {
@@ -123,7 +122,6 @@ public:
 };
 
 struct WatchParameters : public ReferenceCounted<WatchParameters> {
-	const TenantInfo tenant;
 	const Key key;
 	const Optional<Value> value;
 
@@ -134,8 +132,7 @@ struct WatchParameters : public ReferenceCounted<WatchParameters> {
 	const Optional<UID> debugID;
 	const UseProvisionalProxies useProvisionalProxies;
 
-	WatchParameters(TenantInfo tenant,
-	                Key key,
+	WatchParameters(Key key,
 	                Optional<Value> value,
 	                Version version,
 	                TagSet tags,
@@ -143,7 +140,7 @@ struct WatchParameters : public ReferenceCounted<WatchParameters> {
 	                TaskPriority taskID,
 	                Optional<UID> debugID,
 	                UseProvisionalProxies useProvisionalProxies)
-	  : tenant(tenant), key(key), value(value), version(version), tags(tags), spanContext(spanContext), taskID(taskID),
+	  : key(key), value(value), version(version), tags(tags), spanContext(spanContext), taskID(taskID),
 	    debugID(debugID), useProvisionalProxies(useProvisionalProxies) {}
 };
 
@@ -154,48 +151,13 @@ public:
 
 	Reference<const WatchParameters> parameters;
 
-	WatchMetadata(Reference<const WatchParameters> parameters) : parameters(parameters) {}
+	explicit WatchMetadata(Reference<const WatchParameters> parameters) : parameters(parameters) {}
 };
 
 struct MutationAndVersionStream {
 	Standalone<MutationsAndVersionRef> next;
 	PromiseStream<Standalone<MutationsAndVersionRef>> results;
 	bool operator<(MutationAndVersionStream const& rhs) const { return next.version > rhs.next.version; }
-};
-
-struct ChangeFeedStorageData : ReferenceCounted<ChangeFeedStorageData> {
-	UID id;
-	Future<Void> updater;
-	NotifiedVersion version;
-	NotifiedVersion desired;
-	UID interfToken;
-	DatabaseContext* context;
-	double created;
-
-	~ChangeFeedStorageData();
-};
-
-struct ChangeFeedData : ReferenceCounted<ChangeFeedData> {
-	PromiseStream<Standalone<VectorRef<MutationsAndVersionRef>>> mutations;
-	std::vector<ReplyPromiseStream<ChangeFeedStreamReply>> streams;
-
-	Version getVersion();
-	Future<Void> whenAtLeast(Version version);
-
-	UID dbgid;
-	DatabaseContext* context;
-	NotifiedVersion lastReturnedVersion;
-	std::vector<Reference<ChangeFeedStorageData>> storageData;
-	AsyncVar<int> notAtLatest;
-	Promise<Void> refresh;
-	Version maxSeenVersion;
-	Version endVersion = invalidVersion;
-	Version popVersion =
-	    invalidVersion; // like TLog pop version, set by SS and client can check it to see if they missed data
-	double created = 0;
-
-	explicit ChangeFeedData(DatabaseContext* context = nullptr);
-	~ChangeFeedData();
 };
 
 struct EndpointFailureInfo {
@@ -207,57 +169,9 @@ struct KeyRangeLocationInfo {
 	KeyRange range;
 	Reference<LocationInfo> locations;
 
-	KeyRangeLocationInfo() {}
+	KeyRangeLocationInfo() = default;
 	KeyRangeLocationInfo(KeyRange range, Reference<LocationInfo> locations) : range(range), locations(locations) {}
 };
-
-struct OverlappingChangeFeedsInfo {
-	Arena arena;
-	VectorRef<OverlappingChangeFeedEntry> feeds;
-	// would prefer to use key range map but it complicates copy/move constructors
-	std::vector<std::pair<KeyRangeRef, Version>> feedMetadataVersions;
-
-	// for a feed that wasn't present, returns the metadata version it would have been fetched at.
-	Version getFeedMetadataVersion(const KeyRangeRef& feedRange) const;
-};
-
-struct ChangeFeedCacheRange {
-	Key tenantPrefix;
-	Key rangeId;
-	KeyRange range;
-
-	ChangeFeedCacheRange(Key tenantPrefix, Key rangeId, KeyRange range)
-	  : tenantPrefix(tenantPrefix), rangeId(rangeId), range(range) {}
-	ChangeFeedCacheRange(std::tuple<Key, Key, KeyRange> range)
-	  : tenantPrefix(std::get<0>(range)), rangeId(std::get<1>(range)), range(std::get<2>(range)) {}
-
-	bool operator==(const ChangeFeedCacheRange& rhs) const {
-		return tenantPrefix == rhs.tenantPrefix && rangeId == rhs.rangeId && range == rhs.range;
-	}
-};
-
-struct ChangeFeedCacheData : ReferenceCounted<ChangeFeedCacheData> {
-	Version version = -1; // The first version durably stored in the cache
-	Version latest =
-	    -1; // The last version durably store in the cache; this version will not be readable from disk before a commit
-	Version popped = -1; // The popped version of this change feed
-	bool active = false;
-	double inactiveTime = 0;
-};
-
-namespace std {
-template <>
-struct hash<ChangeFeedCacheRange> {
-	static constexpr std::hash<StringRef> hashFunc{};
-	std::size_t operator()(ChangeFeedCacheRange const& range) const {
-		std::size_t seed = 0;
-		boost::hash_combine(seed, hashFunc(range.rangeId));
-		boost::hash_combine(seed, hashFunc(range.range.begin));
-		boost::hash_combine(seed, hashFunc(range.range.end));
-		return seed;
-	}
-};
-} // namespace std
 
 class DatabaseContext : public ReferenceCounted<DatabaseContext>, public FastAllocated<DatabaseContext>, NonCopyable {
 public:
@@ -290,24 +204,17 @@ public:
 		                                           lockAware,
 		                                           internal,
 		                                           apiVersion.version(),
-		                                           switchable,
-		                                           defaultTenant));
+		                                           switchable));
 		cx->globalConfig->init(Reference<AsyncVar<ClientDBInfo> const>(cx->clientInfo),
 		                       std::addressof(cx->clientInfo->get()));
 		return cx;
 	}
 
-	Optional<KeyRangeLocationInfo> getCachedLocation(const TenantInfo& tenant,
-	                                                 const KeyRef&,
-	                                                 Reverse isBackward = Reverse::False);
-	bool getCachedLocations(const TenantInfo& tenant,
-	                        const KeyRangeRef&,
-	                        std::vector<KeyRangeLocationInfo>&,
-	                        int limit,
-	                        Reverse reverse);
+	Optional<KeyRangeLocationInfo> getCachedLocation(const KeyRef&, Reverse isBackward = Reverse::False);
+	bool getCachedLocations(const KeyRangeRef&, std::vector<KeyRangeLocationInfo>&, int limit, Reverse reverse);
 	Reference<LocationInfo> setCachedLocation(const KeyRangeRef&, const std::vector<struct StorageServerInterface>&);
-	void invalidateCache(const Optional<KeyRef>& tenantPrefix, const KeyRef& key, Reverse isBackward = Reverse::False);
-	void invalidateCache(const Optional<KeyRef>& tenantPrefix, const KeyRangeRef& keys);
+	void invalidateCache(const KeyRef& key, Reverse isBackward = Reverse::False);
+	void invalidateCache(const KeyRangeRef& keys);
 
 	// Records that `endpoint` is failed on a healthy server.
 	void setFailedEndpointOnHealthyServer(const Endpoint& endpoint);
@@ -325,13 +232,12 @@ public:
 	Future<Reference<CommitProxyInfo>> getCommitProxiesFuture(UseProvisionalProxies useProvisionalProxies);
 	Reference<GrvProxyInfo> getGrvProxies(UseProvisionalProxies useProvisionalProxies);
 	bool isCurrentGrvProxy(UID proxyId) const;
-	Future<Void> onProxiesChanged() const;
+	Future<Void> onProxiesChanged();
 	Future<HealthMetrics> getHealthMetrics(bool detailed);
 	// Get storage stats of a storage server from the cached healthy metrics if now() - lastUpdate < maxStaleness.
 	// Otherwise, ask GRVProxy for the up-to-date health metrics.
-	Future<Optional<HealthMetrics::StorageStats>> getStorageStats(const UID& id, double maxStaleness);
+	Future<Optional<HealthMetrics::StorageStats>> getStorageStats(UID id, double maxStaleness);
 	// Pass a negative value for `shardLimit` to indicate no limit on the shard number.
-	// Pass a valid `trState` with `hasTenant() == true` to make the function tenant-aware.
 	Future<StorageMetrics> getStorageMetrics(
 	    KeyRange const& keys,
 	    int shardLimit,
@@ -374,23 +280,23 @@ public:
 
 	// watch map operations
 
-	// Gets the watch metadata per tenant id and key
-	Reference<WatchMetadata> getWatchMetadata(int64_t tenantId, KeyRef key) const;
+	// Gets the watch metadata
+	Reference<WatchMetadata> getWatchMetadata(KeyRef key) const;
 
-	// Refreshes the watch metadata. If the same watch is used (this is determined by the tenant id and the key), the
+	// Refreshes the watch metadata. If the same watch is used, the
 	// metadata will be updated.
 	void setWatchMetadata(Reference<WatchMetadata> metadata);
 
 	// Removes the watch metadata
 	// If removeReferenceCount is set to be true, the corresponding WatchRefCount record is removed, too.
-	void deleteWatchMetadata(int64_t tenant, KeyRef key, bool removeReferenceCount = false);
+	void deleteWatchMetadata(KeyRef key, bool removeReferenceCount = false);
 
 	// Increases reference count to the given watch. Returns the number of references to the watch.
-	int32_t increaseWatchRefCount(const int64_t tenant, KeyRef key, const Version& version);
+	int32_t increaseWatchRefCount(KeyRef key, const Version& version);
 
 	// Decreases reference count to the given watch. If the reference count is dropped to 0, the watch metadata will be
 	// removed. Returns the number of references to the watch.
-	int32_t decreaseWatchRefCount(const int64_t tenant, KeyRef key, const Version& version);
+	int32_t decreaseWatchRefCount(KeyRef key, const Version& version);
 
 	void setOption(FDBDatabaseOptions::Option option, Optional<StringRef> value);
 
@@ -431,42 +337,6 @@ public:
 	// Management API, create snapshot
 	Future<Void> createSnapshot(StringRef uid, StringRef snapshot_command);
 
-	Future<Void> getChangeFeedStream(Reference<ChangeFeedData> results,
-	                                 Key rangeID,
-	                                 Version begin = 0,
-	                                 Version end = std::numeric_limits<Version>::max(),
-	                                 KeyRange range = allKeys,
-	                                 int replyBufferSize = -1,
-	                                 bool canReadPopped = true,
-	                                 ReadOptions readOptions = { ReadType::NORMAL, CacheResult::False },
-	                                 bool encrypted = false,
-	                                 Future<Key> tenantPrefix = Key());
-
-	Future<OverlappingChangeFeedsInfo> getOverlappingChangeFeeds(KeyRangeRef ranges, Version minVersion);
-	Future<Void> popChangeFeedMutations(Key rangeID, Version version);
-
-	// BlobGranule API.
-	Future<Key> purgeBlobGranules(KeyRange keyRange,
-	                              Version purgeVersion,
-	                              Optional<Reference<Tenant>> tenant,
-	                              bool force = false);
-	Future<Void> waitPurgeGranulesComplete(Key purgeKey);
-
-	Future<bool> blobbifyRange(KeyRange range, Optional<Reference<Tenant>> tenant = {});
-	Future<bool> blobbifyRangeBlocking(KeyRange range, Optional<Reference<Tenant>> tenant = {});
-	Future<bool> unblobbifyRange(KeyRange range, Optional<Reference<Tenant>> tenant = {});
-	Future<Standalone<VectorRef<KeyRangeRef>>> listBlobbifiedRanges(KeyRange range,
-	                                                                int rangeLimit,
-	                                                                Optional<Reference<Tenant>> tenant = {});
-	Future<Version> verifyBlobRange(const KeyRange& range,
-	                                Optional<Version> version,
-	                                Optional<Reference<Tenant>> tenant = {});
-	Future<bool> flushBlobRange(const KeyRange& range,
-	                            bool compact,
-	                            Optional<Version> version,
-	                            Optional<Reference<Tenant>> tenant = {});
-	Future<bool> blobRestore(const KeyRange range, Optional<Version> version);
-
 	// private:
 	explicit DatabaseContext(Reference<AsyncVar<Reference<IClusterConnectionRecord>>> connectionRecord,
 	                         Reference<AsyncVar<ClientDBInfo>> clientDBInfo,
@@ -478,8 +348,7 @@ public:
 	                         LockAware,
 	                         IsInternal = IsInternal::True,
 	                         int _apiVersion = ApiVersion::LATEST_VERSION,
-	                         IsSwitchable = IsSwitchable::False,
-	                         Optional<TenantName> defaultTenant = Optional<TenantName>());
+	                         IsSwitchable = IsSwitchable::False);
 
 	explicit DatabaseContext(const Error& err);
 
@@ -500,12 +369,8 @@ public:
 	bool proxyProvisional; // Provisional commit proxy and grv proxy are used at the same time.
 	UID proxiesLastChange;
 	LocalityData clientLocality;
-	QueueModel queueModel;
+	StorageServerQueueModel queueModel;
 	EnableLocalityLoadBalance enableLocalityLoadBalance{ EnableLocalityLoadBalance::False };
-
-	// The tenant used when none is specified for a transaction. Ordinarily this is unspecified, in which case the raw
-	// key-space is used.
-	Optional<TenantName> defaultTenant;
 
 	struct VersionRequest {
 		SpanContext spanContext;
@@ -513,7 +378,9 @@ public:
 		TagSet tags;
 		Optional<UID> debugID;
 
-		VersionRequest(SpanContext spanContext, TagSet tags = TagSet(), Optional<UID> debugID = Optional<UID>())
+		explicit VersionRequest(SpanContext spanContext,
+		                        TagSet tags = TagSet(),
+		                        Optional<UID> debugID = Optional<UID>())
 		  : spanContext(spanContext), tags(tags), debugID(debugID) {}
 	};
 
@@ -522,13 +389,22 @@ public:
 		PromiseStream<VersionRequest> stream;
 		Future<Void> actor;
 	};
-	std::map<uint32_t, VersionBatcher> versionBatcher;
+	struct VersionBatcherKey {
+		uint32_t flags;
+		Optional<int64_t> maxGrvQueueDelayMS;
+
+		VersionBatcherKey(uint32_t flags, Optional<int64_t> maxGrvQueueDelayMS)
+		  : flags(flags), maxGrvQueueDelayMS(maxGrvQueueDelayMS) {}
+
+		std::strong_ordering operator<=>(VersionBatcherKey const& rhs) const = default;
+	};
+	std::map<VersionBatcherKey, VersionBatcher> versionBatcher;
 
 	AsyncTrigger connectionFileChangedTrigger;
 
 	// Disallow any reads at a read version lower than minAcceptableReadVersion.  This way the client does not have to
 	// trust that the read version (possibly set manually by the application) is actually from the correct cluster.
-	// Updated everytime we get a GRV response
+	// Updated every time we get a GRV response
 	Version minAcceptableReadVersion = std::numeric_limits<Version>::max();
 	void validateVersion(Version) const;
 
@@ -546,31 +422,11 @@ public:
 	std::unordered_map<Endpoint, EndpointFailureInfo> failedEndpointsOnHealthyServersInfo;
 
 	std::map<UID, StorageServerInfo*> server_interf;
-	std::map<UID, BlobWorkerInterface> blobWorker_interf; // blob workers don't change endpoints for the same ID
 
 	// map from ssid -> tss interface
 	std::unordered_map<UID, StorageServerInterface> tssMapping;
 	// map from tssid -> metrics for that tss pair
 	std::unordered_map<UID, Reference<TSSMetrics>> tssMetrics;
-	// map from changeFeedId -> changeFeedRange
-	std::unordered_map<Key, KeyRange> changeFeedCache;
-	std::unordered_map<UID, ChangeFeedStorageData*> changeFeedUpdaters;
-	std::map<UID, ChangeFeedData*> notAtLatestChangeFeeds;
-
-	IKeyValueStore* storage = nullptr;
-	Future<Void> changeFeedStorageCommitter;
-	Future<Void> initializeChangeFeedCache = Void();
-	int64_t uncommittedCFBytes = 0;
-	Reference<AsyncVar<bool>> commitChangeFeedStorage;
-
-	std::unordered_map<ChangeFeedCacheRange, Reference<ChangeFeedCacheData>> changeFeedCaches;
-	std::unordered_map<Key, std::unordered_map<ChangeFeedCacheRange, Reference<ChangeFeedCacheData>>> rangeId_cacheData;
-
-	void setStorage(IKeyValueStore* storage);
-
-	Reference<ChangeFeedStorageData> getStorageData(StorageServerInterface interf);
-	Version getMinimumChangeFeedVersion();
-	void setDesiredChangeFeedVersion(Version v);
 
 	// map from ssid -> ss tag
 	// @note this map allows the client to identify the latest commit versions
@@ -616,11 +472,7 @@ public:
 	Counter transactionsCommitCompleted;
 	Counter transactionKeyServerLocationRequests;
 	Counter transactionKeyServerLocationRequestsCompleted;
-	Counter transactionBlobGranuleLocationRequests;
-	Counter transactionBlobGranuleLocationRequestsCompleted;
 	Counter transactionStatusRequests;
-	Counter transactionTenantLookupRequests;
-	Counter transactionTenantLookupRequestsCompleted;
 	Counter transactionsTooOld;
 	Counter transactionsFutureVersions;
 	Counter transactionsNotCommitted;
@@ -628,31 +480,11 @@ public:
 	Counter transactionsResourceConstrained;
 	Counter transactionsProcessBehind;
 	Counter transactionsThrottled;
+	Counter transactionsLockRejected;
 	Counter transactionsExpensiveClearCostEstCount;
 	Counter transactionGrvFullBatches;
 	Counter transactionGrvTimedOutBatches;
 	Counter transactionCommitVersionNotFoundForSS;
-
-	// Blob Granule Read metrics. Omit from logging if not used.
-	bool anyBGReads;
-	CounterCollection ccBG;
-	Counter bgReadInputBytes;
-	Counter bgReadOutputBytes;
-	Counter bgReadSnapshotRows;
-	Counter bgReadRowsCleared;
-	Counter bgReadRowsInserted;
-	Counter bgReadRowsUpdated;
-	DDSketch<double> bgLatencies, bgGranulesPerRequest;
-
-	// Change Feed metrics. Omit change feed metrics from logging if not used
-	bool usedAnyChangeFeeds;
-	CounterCollection ccFeed;
-	Counter feedStreamStarts;
-	Counter feedMergeStreamStarts;
-	Counter feedErrors;
-	Counter feedNonRetriableErrors;
-	Counter feedPops;
-	Counter feedPopsFallback;
 
 	DDSketch<double> latencies, readLatencies, commitLatencies, GRVLatencies, mutationsPerCommit, bytesPerCommit;
 
@@ -682,7 +514,6 @@ public:
 
 	bool transactionTracingSample;
 	double verifyCausalReadsProp = 0.0;
-	bool blobGranuleNoMaterialize = false;
 
 	Future<Void> logger;
 	Future<Void> throttleExpirer;
@@ -690,7 +521,7 @@ public:
 	TaskPriority taskID;
 
 	Int64MetricHandle getValueSubmitted;
-	EventMetricHandle<GetValueComplete> getValueCompleted;
+	EventMetricHandle<GetValueCompleteDescriptor> getValueCompleted;
 
 	Reference<AsyncVar<ClientDBInfo>> clientInfo;
 	Future<Void> clientInfoMonitor;
@@ -712,12 +543,9 @@ public:
 	double healthMetricsLastUpdated;
 	double detailedHealthMetricsLastUpdated;
 	Smoother smoothMidShardSize;
-	bool useConfigDatabase{ false };
 
 	UniqueOrderedOptionList<FDBTransactionOptions> transactionDefaults;
 
-	Future<Void> cacheListMonitor;
-	AsyncTrigger updateCache;
 	std::vector<std::unique_ptr<SpecialKeyRangeReadImpl>> specialKeySpaceModules;
 	std::unique_ptr<SpecialKeySpace> specialKeySpace;
 	void registerSpecialKeysImpl(SpecialKeySpace::MODULE module,
@@ -771,16 +599,12 @@ public:
 	                            Version readVersion,
 	                            VersionVector& latestCommitVersion);
 
-	TenantMode getTenantMode() const { return clientInfo->get().tenantMode; }
-
 	// used in template functions to create a transaction
 	using TransactionT = ReadYourWritesTransaction;
 	Reference<TransactionT> createTransaction();
 
 	std::unique_ptr<GlobalConfig> globalConfig;
 	EventCacheHolder connectToDatabaseEventCacheHolder;
-
-	Future<int64_t> lookupTenant(TenantName tenant);
 
 	// Get client-side status information as a JSON string with the following schema:
 	// { "Healthy" : <overall health status: true or false>,
@@ -814,8 +638,16 @@ public:
 	// { "InitializationError" : <error code> }
 	Standalone<StringRef> getClientStatus();
 
+	// Gets a database level backoff delay future, time in seconds.
+	Future<Void> getBackoff() const { return backoffDelay > 0.0 ? delay(backoffDelay) : Future<Void>(Void()); }
+
+	// Updates internal Backoff state when a request fails or succeeds.
+	// E.g., commit_proxy_memory_limit_exceeded error means the database is overloaded
+	// and the client should back off more significantly than transaction-level errors.
+	void updateBackoff(const Error& err);
+
 private:
-	using WatchMapKey = std::pair<int64_t, Key>;
+	using WatchMapKey = Key;
 	using WatchMapKeyHasher = boost::hash<WatchMapKey>;
 	using WatchMapValue = Reference<WatchMetadata>;
 	using WatchMap_t = std::unordered_map<WatchMapKey, WatchMapValue, WatchMapKeyHasher>;
@@ -835,13 +667,15 @@ private:
 	using WatchCounterMap_t = std::unordered_map<WatchMapKey, WatchCounterMapValue, WatchMapKeyHasher>;
 	// Maps the number of the WatchMapKey being used.
 	WatchCounterMap_t watchCounterMap;
+	double backoffDelay = 0.0;
 
 	void initializeSpecialCounters();
 };
 
 // Similar to tr.onError(), but doesn't require a DatabaseContext.
 struct Backoff {
-	Backoff(double backoff = CLIENT_KNOBS->DEFAULT_BACKOFF, double maxBackoff = CLIENT_KNOBS->DEFAULT_MAX_BACKOFF)
+	explicit Backoff(double backoff = CLIENT_KNOBS->DEFAULT_BACKOFF,
+	                 double maxBackoff = CLIENT_KNOBS->DEFAULT_MAX_BACKOFF)
 	  : backoff(backoff), maxBackoff(maxBackoff) {}
 
 	Future<Void> onError() {

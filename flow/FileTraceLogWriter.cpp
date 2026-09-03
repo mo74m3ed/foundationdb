@@ -18,10 +18,10 @@
  * limitations under the License.
  */
 
-#include "flow/FileTraceLogWriter.h"
+#include "FileTraceLogWriter.h"
 #include "flow/Platform.h"
 #include "flow/flow.h"
-#include "flow/ThreadHelper.actor.h"
+#include "flow/ThreadHelper.h"
 
 #if defined(__unixish__)
 #define __open ::open
@@ -49,7 +49,7 @@
 #include <cmath>
 
 struct IssuesListImpl {
-	IssuesListImpl() {}
+	IssuesListImpl() = default;
 	void addIssue(std::string const& issue) {
 		MutexHolder h(mutex);
 		issues.insert(issue);
@@ -142,7 +142,7 @@ void FileTraceLogWriter::write(const char* str, size_t len) {
 		} else {
 			issues->addIssue("trace_log_file_write_error");
 			needsResolve = true;
-			fprintf(stderr, "Unexpected error [%d] when flushing trace log.\n", errno);
+			fprintf(stderr, "Unexpected error [%d] (%s) when writing to trace file.\n", errno, strerror(errno));
 			lastError(errno);
 			threadSleep(0.1);
 		}
@@ -180,20 +180,23 @@ void FileTraceLogWriter::open() {
 			                   extension.c_str(),
 			                   tracePartialFileSuffix.c_str());
 		} else {
+			// Save errno before issuing subsequent system calls,
+			// such as write(2) via fprintf, in case that fails for
+			// some other reason.
+			int saveErrno = errno;
 			fprintf(stderr,
 			        "ERROR: could not create trace log file `%s' (%d: %s)\n",
 			        finalname.c_str(),
-			        errno,
-			        strerror(errno));
+			        saveErrno,
+			        strerror(saveErrno));
 			issues->addIssue("trace_log_could_not_create_file");
 			needsResolve = true;
 
-			int errorNum = errno;
-			onMainThreadVoid([finalname = finalname, errorNum] {
+			onMainThreadVoid([finalname = finalname, saveErrno] {
 				TraceEvent(SevWarnAlways, "TraceFileOpenError")
 				    .detail("Filename", finalname)
-				    .detail("ErrorCode", errorNum)
-				    .detail("Error", strerror(errorNum))
+				    .detail("ErrorCode", saveErrno)
+				    .detail("Error", strerror(saveErrno))
 				    .trackLatest("TraceFileOpenError");
 			});
 			threadSleep(FLOW_KNOBS->TRACE_RETRY_OPEN_INTERVAL);
@@ -224,7 +227,9 @@ void FileTraceLogWriter::roll() {
 }
 
 void FileTraceLogWriter::sync() {
-	__fsync(traceFileFD);
+	if (__fsync(traceFileFD) != 0) {
+		fprintf(stderr, "ERROR: fsync(%s): %d, %s\n", finalname.c_str(), errno, strerror(errno));
+	}
 }
 
 void FileTraceLogWriter::cleanupTraceFiles() {
@@ -253,7 +258,7 @@ void FileTraceLogWriter::cleanupTraceFiles() {
 			std::sort(existingTraceFiles.begin(), existingTraceFiles.end(), std::greater<std::string>());
 
 			uint64_t runningTotal = 0;
-			std::vector<std::string>::iterator fileListIterator = existingTraceFiles.begin();
+			auto fileListIterator = existingTraceFiles.begin();
 
 			while (runningTotal < maxLogsSize && fileListIterator != existingTraceFiles.end()) {
 				runningTotal += (fileSize(joinPath(directory, *fileListIterator)) + FLOW_KNOBS->ZERO_LENGTH_FILE_PAD);

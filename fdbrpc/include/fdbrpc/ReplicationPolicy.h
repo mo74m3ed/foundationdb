@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,14 +30,33 @@ void serializeReplicationPolicy(Ar& ar, Reference<IReplicationPolicy>& policy);
 extern void testReplicationPolicy(int nTests);
 
 struct IReplicationPolicy : public ReferenceCounted<IReplicationPolicy> {
-	IReplicationPolicy() {}
-	virtual ~IReplicationPolicy() {}
+	IReplicationPolicy() : _depth(-1), _maxdepth(-1) {}
+	virtual ~IReplicationPolicy() = default;
 	virtual std::string name() const = 0;
 	virtual std::string info() const = 0;
 	virtual void addref() { ReferenceCounted<IReplicationPolicy>::addref(); }
 	virtual void delref() { ReferenceCounted<IReplicationPolicy>::delref(); }
 	virtual int maxResults() const = 0;
-	virtual int depth() const = 0;
+
+	int depth() const {
+		if (_depth == -1) {
+			_depth = calculateDepth();
+		}
+		return _depth;
+	}
+
+	int maxdepth() const {
+		if (_maxdepth == -1) {
+			int globalMax = 0;
+			traverseForMaxDepth(globalMax);
+			_maxdepth = globalMax;
+		}
+		return _maxdepth;
+	}
+
+	// Helper to traverse tree and find global maximum depth
+	virtual void traverseForMaxDepth(int& globalMax) const = 0;
+
 	virtual bool selectReplicas(Reference<LocalitySet>& fromServers,
 	                            std::vector<LocalityEntry> const& alsoServers,
 	                            std::vector<LocalityEntry>& results) = 0;
@@ -73,6 +92,12 @@ struct IReplicationPolicy : public ReferenceCounted<IReplicationPolicy> {
 		return keys;
 	}
 	virtual void attributeKeys(std::set<std::string>*) const = 0;
+
+	mutable int _maxdepth; // -1 means uninitialized
+
+protected:
+	virtual int calculateDepth() const = 0;
+	mutable int _depth; // -1 means uninitialized
 };
 
 template <class Archive>
@@ -96,12 +121,11 @@ inline void save(Archive& ar, const Reference<IReplicationPolicy>& value) {
 }
 
 struct PolicyOne final : IReplicationPolicy {
-	PolicyOne(){};
+	PolicyOne() = default;
 	explicit PolicyOne(const PolicyOne& o) {}
 	std::string name() const override { return "One"; }
 	std::string info() const override { return "1"; }
 	int maxResults() const override { return 1; }
-	int depth() const override { return 1; }
 	bool validate(std::vector<LocalityEntry> const& solutionSet,
 	              Reference<LocalitySet> const& fromServers) const override;
 	bool selectReplicas(Reference<LocalitySet>& fromServers,
@@ -113,6 +137,14 @@ struct PolicyOne final : IReplicationPolicy {
 	}
 	void deserializationDone() override {}
 	void attributeKeys(std::set<std::string>* set) const override { return; }
+
+	void traverseForMaxDepth(int& globalMax) const override {
+		globalMax = std::max(globalMax, depth());
+		_maxdepth = globalMax;
+	}
+
+protected:
+	int calculateDepth() const override { return 1; }
 };
 
 struct PolicyAcross final : IReplicationPolicy {
@@ -126,7 +158,6 @@ struct PolicyAcross final : IReplicationPolicy {
 	int getCount() const { return _count; }
 	std::string info() const override { return format("%s^%d x ", _attribKey.c_str(), _count) + _policy->info(); }
 	int maxResults() const override { return _count * _policy->maxResults(); }
-	int depth() const override { return 1 + _policy->depth(); }
 	bool validate(std::vector<LocalityEntry> const& solutionSet,
 	              Reference<LocalitySet> const& fromServers) const override;
 	bool selectReplicas(Reference<LocalitySet>& fromServers,
@@ -155,6 +186,16 @@ struct PolicyAcross final : IReplicationPolicy {
 
 	const std::string& attributeKey() const { return _attribKey; }
 
+	void traverseForMaxDepth(int& globalMax) const override {
+		globalMax = std::max(globalMax, depth());
+		_maxdepth = globalMax;
+		_policy->traverseForMaxDepth(globalMax);
+	}
+
+	inline bool isSingleAcrossOverPolicyOne() const noexcept {
+		return maxdepth() == 2 && dynamic_cast<PolicyOne*>(_policy.getPtr());
+	}
+
 protected:
 	int _count;
 	std::string _attribKey;
@@ -166,23 +207,29 @@ protected:
 	Reference<LocalitySet> _selected;
 	VectorRef<std::pair<int, int>> _addedResults;
 	Arena _arena;
+
+	int calculateDepth() const override {
+		int result = 1 + _policy->depth();
+		return result;
+	}
 };
 
 struct PolicyAnd final : IReplicationPolicy {
 	friend struct serializable_traits<PolicyAnd*>;
-	PolicyAnd(std::vector<Reference<IReplicationPolicy>> policies) : _policies(policies), _sortedPolicies(policies) {
+	explicit PolicyAnd(std::vector<Reference<IReplicationPolicy>> policies)
+	  : _policies(policies), _sortedPolicies(policies) {
 		// Sort the policy array
 		std::sort(_sortedPolicies.begin(), _sortedPolicies.end(), PolicyAnd::comparePolicy);
 	}
 	explicit PolicyAnd(const PolicyAnd& other) : _policies(other._policies), _sortedPolicies(other._sortedPolicies) {}
-	explicit PolicyAnd() {}
+	explicit PolicyAnd() = default;
 	std::string name() const override { return "And"; }
 	std::string info() const override {
 		std::string infoText;
 		for (auto& policy : _policies) {
-			infoText += ((infoText.length()) ? " & (" : "(") + policy->info() + ")";
+			infoText += ((!infoText.empty()) ? " & (" : "(") + policy->info() + ")";
 		}
-		if (_policies.size())
+		if (!_policies.empty())
 			infoText = "(" + infoText + ")";
 		return infoText;
 	}
@@ -192,16 +239,6 @@ struct PolicyAnd final : IReplicationPolicy {
 			resultsMax += policy->maxResults();
 		}
 		return resultsMax;
-	}
-	int depth() const override {
-		int policyDepth, depthMax = 0;
-		for (auto& policy : _policies) {
-			policyDepth = policy->depth();
-			if (policyDepth > depthMax) {
-				depthMax = policyDepth;
-			}
-		}
-		return depthMax;
 	}
 	bool validate(std::vector<LocalityEntry> const& solutionSet,
 	              Reference<LocalitySet> const& fromServers) const override;
@@ -241,9 +278,28 @@ struct PolicyAnd final : IReplicationPolicy {
 		}
 	}
 
+	void traverseForMaxDepth(int& globalMax) const override {
+		globalMax = std::max(globalMax, depth());
+		_maxdepth = globalMax;
+		for (auto& policy : _policies) {
+			policy->traverseForMaxDepth(globalMax);
+		}
+	}
+
 protected:
 	std::vector<Reference<IReplicationPolicy>> _policies;
 	std::vector<Reference<IReplicationPolicy>> _sortedPolicies;
+
+	int calculateDepth() const override {
+		int policyDepth, depthMax = 0;
+		for (auto& policy : _policies) {
+			policyDepth = policy->depth();
+			if (policyDepth > depthMax) {
+				depthMax = policyDepth;
+			}
+		}
+		return depthMax;
+	}
 };
 
 template <class Ar>
@@ -259,7 +315,7 @@ void serializeReplicationPolicy(Ar& ar, Reference<IReplicationPolicy>& policy) {
 			pointer->serialize(ar);
 			policy = Reference<IReplicationPolicy>(pointer);
 		} else if (name == "Across"_sr) {
-			PolicyAcross* pointer = new PolicyAcross(0, "", Reference<IReplicationPolicy>());
+			auto* pointer = new PolicyAcross(0, "", Reference<IReplicationPolicy>());
 			pointer->serialize(ar);
 			policy = Reference<IReplicationPolicy>(pointer);
 		} else if (name == "And"_sr) {

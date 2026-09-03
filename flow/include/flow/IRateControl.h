@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@
 
 class IRateControl {
 public:
-	virtual ~IRateControl() {}
+	virtual ~IRateControl() = default;
 	// Future is Ready once you can use n units;
 	virtual Future<Void> getAllowance(unsigned int n) = 0;
 	// If all of the allowance is not used the unused units can be given back.
@@ -65,7 +65,7 @@ public:
 		// If budget is still >= 0 then it's safe to use the allowance right now.
 		if (m_budget >= 0)
 			return Void();
-		// Otherise return the amount of time it will take for the budget to rise to 0.
+		// Otherwise return the amount of time it will take for the budget to rise to 0.
 		return m_stop.getFuture() || delay(m_seconds * -m_budget / m_limit);
 	}
 
@@ -98,7 +98,7 @@ private:
 // An IRateControl implementation that enforces no limit
 class Unlimited final : public IRateControl, ReferenceCounted<Unlimited> {
 public:
-	Unlimited() {}
+	Unlimited() = default;
 	~Unlimited() override = default;
 	void addref() override { ReferenceCounted<Unlimited>::addref(); }
 	void delref() override { ReferenceCounted<Unlimited>::delref(); }

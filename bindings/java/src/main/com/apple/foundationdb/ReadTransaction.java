@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -440,12 +440,6 @@ public interface ReadTransaction extends ReadTransactionContext {
 	 *  <i>first</i> keys in the range. Pass {@link #ROW_LIMIT_UNLIMITED} if this query
 	 *  should not limit the number of results. If {@code reverse} is {@code true} rows
 	 *  will be limited starting at the end of the range.
-	 * @param matchIndex the mode to return index entries based on whether their
-	 *  corresponding records are present, examples:
-	 *     {@link FDBTransaction#MATCH_INDEX_ALL}
-	 *     {@link FDBTransaction#MATCH_INDEX_NONE}
-	 *     {@link FDBTransaction#MATCH_INDEX_MATCHED_ONLY}
-	 *     {@link FDBTransaction#MATCH_INDEX_UNMATCHED_ONLY}
 	 * @param reverse return results starting at the end of the range in reverse order.
 	 *  Reading ranges in reverse is supported natively by the database and should
 	 *  have minimal extra cost.
@@ -466,7 +460,7 @@ public interface ReadTransaction extends ReadTransactionContext {
 	 * @return a handle to access the results of the asynchronous call
 	 */
 	AsyncIterable<MappedKeyValue> getMappedRange(KeySelector begin, KeySelector end, byte[] mapper, int limit,
-	                                             int matchIndex, boolean reverse, StreamingMode mode);
+	                                             boolean reverse, StreamingMode mode);
 
 	/**
 	 * Gets an estimate for the number of bytes stored in the given range.
@@ -511,6 +505,18 @@ public interface ReadTransaction extends ReadTransactionContext {
 	CompletableFuture<KeyArrayResult> getRangeSplitPoints(byte[] begin, byte[] end, long chunkSize);
 
 	/**
+	 * Gets at most <code>limit</code> interior split points, including shard boundaries.
+	 * The start and end keys of the given range are always included.
+	 *
+	 * @param begin the beginning of the range (inclusive)
+	 * @param end the end of the range (exclusive)
+	 * @param chunkSize the target estimated byte size of each chunk
+	 * @param limit the maximum number of interior split points, or a negative value for no limit
+	 * @return a handle to access the results of the asynchronous call
+	 */
+	CompletableFuture<KeyArrayResult> getRangeSplitPoints(byte[] begin, byte[] end, long chunkSize, int limit);
+
+	/**
 	 * Gets a list of keys that can split the given range into (roughly) equally sized chunks based on <code>chunkSize</code>
 	 * Note: the returned split points contain the start key and end key of the given range.
 	 *
@@ -522,18 +528,16 @@ public interface ReadTransaction extends ReadTransactionContext {
 	CompletableFuture<KeyArrayResult> getRangeSplitPoints(Range range, long chunkSize);
 
 	/**
-	 * Gets the blob granule ranges for a given region.
-	 * Returned in batches, requires calling again moving the begin key up.
+	 * Gets at most <code>limit</code> interior split points, including shard boundaries.
+	 * The start and end keys of the given range are always included.
 	 *
-	 * @param begin beginning of the range (inclusive)
-	 * @param end end of the range (exclusive)
-	 * @param rowLimit the limit on the number of returned rows
-
-	 * @return list of blob granules in the given range. May not be all.
+	 * @param range the range of the keys
+	 * @param chunkSize the target estimated byte size of each chunk
+	 * @param limit the maximum number of interior split points, or a negative value for no limit
+	 * @return a handle to access the results of the asynchronous call
 	 */
-	 CompletableFuture<KeyRangeArrayResult> getBlobGranuleRanges(byte[] begin, byte[] end, int rowLimit);
+	CompletableFuture<KeyArrayResult> getRangeSplitPoints(Range range, long chunkSize, int limit);
 
-	
 	/**
 	 * Returns a set of options that can be set on a {@code Transaction}
 	 *

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ extern const TTaskFct NO_OP_TASK;
  */
 class ITimer {
 public:
-	virtual ~ITimer() {}
+	virtual ~ITimer() = default;
 
 	virtual void cancel() = 0;
 };
@@ -47,7 +47,7 @@ public:
  */
 class IScheduler {
 public:
-	virtual ~IScheduler() {}
+	virtual ~IScheduler() = default;
 
 	// Create scheduler threads and begin accepting tasks
 	virtual void start() = 0;

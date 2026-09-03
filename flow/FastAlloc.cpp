@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 
 #include "flow/FastAlloc.h"
 
+#include "flow/MemoryTracker.h"
 #include "flow/ThreadPrimitives.h"
 #include "flow/Trace.h"
 #include "flow/Error.h"
@@ -109,9 +110,6 @@ bool valgrindPrecise() {
 }
 #endif
 
-template <int Size>
-void* FastAllocator<Size>::freelist = nullptr;
-
 std::atomic<int64_t> g_hugeArenaMemory(0);
 
 double hugeArenaLastLogged = 0;
@@ -119,6 +117,9 @@ std::map<std::string, std::pair<int, int64_t>> hugeArenaTraces;
 
 void hugeArenaSample(int size) {
 	if (TraceEvent::isNetworkThread()) {
+		static SimpleCounter<int64_t>* calls = SimpleCounter<int64_t>::makeCounter("/flow/fastalloc/hugeArenaSample");
+		calls->increment(1);
+
 		auto& info = hugeArenaTraces[platform::get_backtrace()];
 		info.first++;
 		info.second += size;
@@ -373,19 +374,38 @@ void* FastAllocator<Size>::allocate() {
 	if (keepalive_allocator::isActive()) [[unlikely]]
 		return keepalive_allocator::allocate(Size);
 
+	// Accounting should mirror release() below.
+	static int size = Size;
+	static SimpleCounter<int64_t>* calls =
+	    SimpleCounter<int64_t>::makeCounter(format("/flow/fastalloc/allocateCallsSize%d", size));
+	static SimpleCounter<int64_t>* bytes =
+	    SimpleCounter<int64_t>::makeCounter(format("/flow/fastalloc/allocateBytesSize%d", size));
+	calls->increment(1);
+	bytes->increment(size);
+
 #if defined(USE_GPERFTOOLS) || defined(ADDRESS_SANITIZER)
-	// Some usages of FastAllocator require 4096 byte alignment.
-	return aligned_alloc(Size >= 4096 ? 4096 : alignof(void*), Size);
+	{
+		// Some usages of FastAllocator require 4096 byte alignment.
+		// This path bypasses the freelist and the memTrackerOnAlloc at the bottom
+		// of the function, so track here too — otherwise every FastAllocator size
+		// class (and the small Arena blocks backed by it) would be invisible to the
+		// tracker under gperftools / ASan. Symmetric with release() below. (Braces
+		// scope this `p` so it can't collide with the freelist `p` compiled below.)
+		void* p = aligned_alloc(Size >= 4096 ? 4096 : alignof(void*), Size);
+		memTrackerOnAlloc(p, Size);
+		return p;
+	}
 #endif
 
 #if VALGRIND
 	if (valgrindPrecise()) {
 		// Some usages of FastAllocator require 4096 byte alignment
-		return aligned_alloc(Size >= 4096 ? 4096 : alignof(void*), Size);
+		void* p = aligned_alloc(Size >= 4096 ? 4096 : alignof(void*), Size);
+		memTrackerOnAlloc(p, Size); // track here too (see the gperftools/ASan path above)
+		return p;
 	}
 #endif
 
-#if FASTALLOC_THREAD_SAFE
 	ThreadData& thr = threadData();
 	if (!thr.freelist) {
 		ASSERT(thr.count == 0);
@@ -405,22 +425,33 @@ void* FastAllocator<Size>::allocate() {
 	thr.freelist = *(void**)p;
 	ASSERT(!thr.freelist == (thr.count == 0)); // freelist is empty if and only if count is 0
 	// check( p, true );
-#else
-	void* p = freelist;
-	if (!p)
-		getMagazine();
-#if VALGRIND
-	VALGRIND_MAKE_MEM_DEFINED(p, sizeof(void*));
-#endif
-	freelist = *(void**)p;
-#endif
 #if VALGRIND
 	VALGRIND_MALLOCLIKE_BLOCK(p, Size, 0, 0);
 #endif
 #if defined(ALLOC_INSTRUMENTATION) || defined(ALLOC_INSTRUMENTATION_STDOUT)
 	recordAllocation(p, Size);
 #endif
+	memTrackerOnAlloc(p, Size);
 	return p;
+}
+
+void* countedNew(size_t nbytes) {
+	static SimpleCounter<int64_t>* calls = SimpleCounter<int64_t>::makeCounter("/flow/fastalloc/newCalls");
+	static SimpleCounter<int64_t>* bytes = SimpleCounter<int64_t>::makeCounter("/flow/fastalloc/newBytes");
+	calls->increment(1);
+	bytes->increment(nbytes);
+
+	void* p = new uint8_t[nbytes];
+	return p;
+}
+
+void countedDelete(size_t nbytes, void* ptr) {
+	static SimpleCounter<int64_t>* calls = SimpleCounter<int64_t>::makeCounter("/flow/fastalloc/deleteCalls");
+	static SimpleCounter<int64_t>* bytes = SimpleCounter<int64_t>::makeCounter("/flow/fastalloc/deleteBytes");
+	calls->increment(1);
+	bytes->increment(nbytes);
+
+	delete[] reinterpret_cast<uint8_t*>(ptr);
 }
 
 template <int Size>
@@ -428,17 +459,30 @@ void FastAllocator<Size>::release(void* ptr) {
 	if (keepalive_allocator::isActive()) [[unlikely]]
 		return keepalive_allocator::invalidate(ptr);
 
+	// Accounting should mirror allocate() above.  Only count paths where we
+	// allocated/free memory from lower levels or from our magazine cache.
+	static int size = Size;
+	static SimpleCounter<int64_t>* calls =
+	    SimpleCounter<int64_t>::makeCounter(format("/flow/fastalloc/releaseCallsSize%d", size));
+	static SimpleCounter<int64_t>* bytes =
+	    SimpleCounter<int64_t>::makeCounter(format("/flow/fastalloc/releaseBytesSize%d", size));
+	calls->increment(1);
+	bytes->increment(size);
+
 #if defined(USE_GPERFTOOLS) || defined(ADDRESS_SANITIZER)
+	// Mirror allocate()'s early-return tracking so frees on this path debit the
+	// live table (without this the block would leak in the tracker's accounting).
+	memTrackerOnFree(ptr);
 	return aligned_free(ptr);
 #endif
 
 #if VALGRIND
 	if (valgrindPrecise()) {
+		memTrackerOnFree(ptr); // mirror allocate() (see the gperftools/ASan path above)
 		return aligned_free(ptr);
 	}
 #endif
 
-#if FASTALLOC_THREAD_SAFE
 	ThreadData& thr = threadData();
 	if (thr.count == magazine_size) {
 		if (thr.alternate) // Two full magazines, return one
@@ -457,10 +501,6 @@ void FastAllocator<Size>::release(void* ptr) {
 	*(void**)ptr = thr.freelist;
 	// check(ptr, false);
 	thr.freelist = ptr;
-#else
-	*(void**)ptr = freelist;
-	freelist = ptr;
-#endif
 
 #if VALGRIND
 	VALGRIND_FREELIKE_BLOCK(ptr, 0);
@@ -468,6 +508,7 @@ void FastAllocator<Size>::release(void* ptr) {
 #if defined(ALLOC_INSTRUMENTATION) || defined(ALLOC_INSTRUMENTATION_STDOUT)
 	recordDeallocation(ptr);
 #endif
+	memTrackerOnFree(ptr);
 }
 
 template <int Size>
@@ -592,17 +633,22 @@ void FastAllocator<Size>::getMagazine() {
 #else
 	const bool includeGuardPages = true;
 #endif
-	block = (void**)::allocate(magazine_size * Size, /*allowLargePages*/ false, includeGuardPages);
+	// NOTE: rely on lower level metrics in allocate() (and whatever it calls)
+	// for accounting the allocations it does.
+	block = (void**)::allocate(static_cast<size_t>(magazine_size) * Size, /*allowLargePages*/ false, includeGuardPages);
 #endif
 
 	// void** block = new void*[ magazine_size * PSize ];
 	for (int i = 0; i < magazine_size - 1; i++) {
-		block[i * PSize + 1] = block[i * PSize] = &block[(i + 1) * PSize];
-		check(&block[i * PSize], false);
+		const size_t offset = static_cast<size_t>(i) * PSize;
+		const size_t nextOffset = static_cast<size_t>(i + 1) * PSize;
+		block[offset + 1] = block[offset] = &block[nextOffset];
+		check(&block[offset], false);
 	}
 
-	block[(magazine_size - 1) * PSize + 1] = block[(magazine_size - 1) * PSize] = nullptr;
-	check(&block[(magazine_size - 1) * PSize], false);
+	const size_t lastOffset = static_cast<size_t>(magazine_size - 1) * PSize;
+	block[lastOffset + 1] = block[lastOffset] = nullptr;
+	check(&block[lastOffset], false);
 	thr.freelist = block;
 	thr.count = magazine_size;
 }
@@ -671,7 +717,7 @@ TEST_CASE("/jemalloc/4k_aligned_usable_size") {
 		// Check that we can allocate 4k aligned up to 16k with no internal
 		// fragmentation
 		for (int i = 1; i < 4; ++i) {
-			ptr = aligned_alloc(4096, i * 4096);
+			ptr = aligned_alloc(4096, static_cast<size_t>(i) * 4096);
 			ASSERT_EQ(malloc_usable_size(ptr), i * 4096);
 			aligned_free(ptr);
 			ptr = nullptr;

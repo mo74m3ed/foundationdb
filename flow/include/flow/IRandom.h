@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,8 @@
 // This is as good a place as any, I guess.
 
 template <typename T>
-typename std::enable_if<std::is_integral<T>::value, int>::type compare(T l, T r) {
+    requires(std::is_integral_v<T>)
+int compare(T l, T r) {
 	const int gt = l > r;
 	const int lt = l < r;
 	return gt - lt;
@@ -49,7 +50,8 @@ typename std::enable_if<std::is_integral<T>::value, int>::type compare(T l, T r)
 }
 
 template <typename T, typename U>
-typename std::enable_if<!std::is_integral<T>::value, int>::type compare(T const& l, U const& r) {
+    requires(!std::is_integral_v<T>)
+int compare(T const& l, U const& r) {
 	return l.compare(r);
 }
 
@@ -93,8 +95,8 @@ public:
 	static UID fromStringThrowsOnFailure(std::string const&);
 
 	template <class Ar>
-	void serialize_unversioned(
-	    Ar& ar) { // Changing this serialization format will affect key definitions, so can't simply be versioned!
+	void serialize_unversioned(Ar& ar) {
+		// Changing this serialization format will affect key definitions, so can't simply be versioned!
 		serializer(ar, part[0], part[1]);
 	}
 };
@@ -150,8 +152,21 @@ public:
 	virtual std::string randomAlphaNumeric(int length) = 0;
 	virtual void randomBytes(uint8_t* buf, int length) = 0;
 	virtual uint32_t randomSkewedUInt32(uint32_t min, uint32_t maxPlusOne) = 0;
+
+	// Given an input percentage, returns true with a probability of that percentage.
+	// Valid range: 1 <= percent <= 99
+	// 0 percent -> not allowed since it will always be false anyway
+	// 100 percent -> not allowed since it will always be true anyway
+	// 1 percent -> returns true with a probability of 1% (0.01)
+	// 50 percent -> returns true with a probability of 50% (0.5)
+	// 99 percent -> returns true with a probability of 99% (0.99)
+	virtual bool truePercent(const int percent) = 0;
+
 	virtual uint64_t peek() const = 0; // returns something that is probably different for different random states.
 	                                   // Deterministic (and idempotent) for a deterministic generator.
+
+	// Reset the random number generator with a new seed (only supported by deterministic generators)
+	virtual void resetSeed(uint64_t seed) {}
 
 	virtual void addref() = 0;
 	virtual void delref() = 0;
@@ -196,7 +211,7 @@ public:
 extern FILE* randLog;
 
 // Sets the seed for the deterministic random number generator on the current thread
-void setThreadLocalDeterministicRandomSeed(uint32_t seed);
+void setThreadLocalDeterministicRandomSeed(uint64_t seed);
 
 // Returns the random number generator that can be seeded. This generator should only
 // be used in contexts where the choice to call it is deterministic.
@@ -213,5 +228,10 @@ Reference<IRandom> nondeterministicRandom();
 // determinism of the simulator. This is useful for things like generating random UIDs for debug transactions.
 // WARNING: This is not thread safe and must not be called from any other thread than the network thread!
 Reference<IRandom> debugRandom();
+
+// Workaround for https://github.com/apple/swift/issues/62354
+inline int64_t swift_get_randomInt64(Reference<IRandom> random, int64_t min, int64_t maxPlusOne) {
+	return random->randomInt64(min, maxPlusOne);
+}
 
 #endif

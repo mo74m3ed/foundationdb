@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,11 +24,12 @@
 #include "flow/MkCert.h"
 #include "flow/PKey.h"
 #include "flow/ScopeExit.h"
+#include "flow/Trace.h"
 
-#include <limits>
 #include <memory>
 #include <string>
 #include <cstring>
+
 #include <openssl/bio.h>
 #include <openssl/ec.h>
 #include <openssl/err.h>
@@ -89,13 +90,13 @@ struct CertAndKeyNative {
 		return ret;
 	}
 
-	PemType toPem(Arena& arena) {
+	PemType toPem(Arena& arena, StringRef password = StringRef()) {
 		auto ret = PemType{};
 		if (null())
 			return ret;
 		ASSERT(valid());
 		ret.certPem = writeX509CertPem(arena, cert);
-		ret.privateKeyPem = privateKey.writePem(arena);
+		ret.privateKeyPem = privateKey.writePem(arena, password);
 		return ret;
 	}
 };
@@ -253,17 +254,17 @@ CertAndKeyNative makeCertNative(CertSpecRef spec, CertAndKeyNative issuer) {
 	return ret;
 }
 
-CertAndKeyRef CertAndKeyRef::make(Arena& arena, CertSpecRef spec, CertAndKeyRef issuerPem) {
+CertAndKeyRef CertAndKeyRef::make(Arena& arena, CertSpecRef spec, CertAndKeyRef issuerPem, StringRef password) {
 	auto issuer = CertAndKeyNative::fromPem(issuerPem);
 	auto newCertAndKey = makeCertNative(spec, issuer);
-	return newCertAndKey.toPem(arena);
+	return newCertAndKey.toPem(arena, password);
 }
 
 CertSpecRef CertSpecRef::make(Arena& arena, CertKind kind) {
 	auto spec = CertSpecRef{};
 	spec.serialNumber = static_cast<long>(deterministicRandom()->randomInt64(0, 1e10));
 	spec.offsetNotBefore = 0; // now
-	spec.offsetNotAfter = 60 * 60 * 24 * 365; // 1 year from now
+	spec.offsetNotAfter = 60L * 60 * 24 * 365; // 1 year from now
 	auto& subject = spec.subjectName;
 	subject.push_back(arena, { "countryName"_sr, "DE"_sr });
 	subject.push_back(arena, { "localityName"_sr, "Berlin"_sr });
@@ -366,6 +367,11 @@ StringRef CertKind::getCommonName(StringRef prefix, Arena& arena) const {
 	} else {
 		return prefix.withSuffix(side, arena);
 	}
+}
+
+CertAndKeyRef makePasswCert(Arena& arena, StringRef password) {
+	auto spec = CertSpecRef::make(arena, CertKind(Server{}));
+	return CertAndKeyRef::make(arena, spec, CertAndKeyRef{}, password);
 }
 
 } // namespace mkcert

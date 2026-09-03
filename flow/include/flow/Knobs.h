@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,41 +32,28 @@
 #include <variant>
 #include <optional>
 
-// Helper macros to allow the init macro to be called with an optional third
-// parameter, used to explicit set atomicity of knobs.
-#define KNOB_FN(_1, _2, _3, FN, ...) FN
 #define INIT_KNOB(knob, value) initKnob(knob, value, #knob)
-#define INIT_ATOMIC_KNOB(knob, value, atomic) initKnob(knob, value, #knob, atomic)
 
 // NOTE: Directly using KnobValueRef as the return type for Knobs::parseKnobValue would result
 // in a cyclic dependency, so we use this intermediate ParsedKnobValue type
 struct NoKnobFound {};
 using ParsedKnobValue = std::variant<NoKnobFound, int, double, int64_t, bool, std::string>;
 
-enum class ConfigDBType {
-	DISABLED,
-	SIMPLE,
-	PAXOS,
-};
-
-enum class Atomic { YES, NO };
-
 class Knobs {
 protected:
 	template <class T>
 	struct KnobValue {
 		T* value;
-		Atomic atomic;
 	};
 
 	Knobs() = default;
 	Knobs(Knobs const&) = delete;
 	Knobs& operator=(Knobs const&) = delete;
-	void initKnob(double& knob, double value, std::string const& name, Atomic atomic = Atomic::YES);
-	void initKnob(int64_t& knob, int64_t value, std::string const& name, Atomic atomic = Atomic::YES);
-	void initKnob(int& knob, int value, std::string const& name, Atomic atomic = Atomic::YES);
-	void initKnob(std::string& knob, const std::string& value, const std::string& name, Atomic atomic = Atomic::YES);
-	void initKnob(bool& knob, bool value, std::string const& name, Atomic atomic = Atomic::YES);
+	void initKnob(double& knob, double value, std::string const& name);
+	void initKnob(int64_t& knob, int64_t value, std::string const& name);
+	void initKnob(int& knob, int value, std::string const& name);
+	void initKnob(std::string& knob, const std::string& value, const std::string& name);
+	void initKnob(bool& knob, bool value, std::string const& name);
 
 	std::map<std::string, KnobValue<double>> double_knobs;
 	std::map<std::string, KnobValue<int64_t>> int64_knobs;
@@ -95,7 +82,6 @@ public:
 	ParsedKnobValue getKnob(const std::string& name) const;
 
 	ParsedKnobValue parseKnobValue(std::string const& name, std::string const& value) const;
-	bool isAtomic(std::string const& knob) const;
 	void trace() const;
 };
 
@@ -118,6 +104,8 @@ public:
 	double HOSTNAME_RECONNECT_INIT_INTERVAL;
 	double HOSTNAME_RECONNECT_MAX_INTERVAL;
 	bool ENABLE_COORDINATOR_DNS_CACHE;
+	double COORDINATOR_DNS_CACHE_REFRESH_INTERVAL;
+	double COORDINATOR_DNS_CACHE_TTL;
 	double CACHE_REFRESH_INTERVAL_WHEN_ALL_ALTERNATIVES_FAILED;
 
 	double DELAY_JITTER_OFFSET;
@@ -133,8 +121,22 @@ public:
 	bool FAST_ALLOC_ALLOW_GUARD_PAGES;
 	double HUGE_ARENA_LOGGING_BYTES;
 	double HUGE_ARENA_LOGGING_INTERVAL;
+	// This setting allows to let the fdbserver abort instead of exit to generate coredumps
+	// in case of a failure.
+	bool ABORT_ON_FAILURE;
 
 	double MEMORY_USAGE_CHECK_INTERVAL;
+
+	// Per-call-site sampled memory tracker. See design/memory-tracker.md and flow/MemoryTracker.h.
+	// All of these are startup-only: they are read once and not meant to change at runtime
+	// (dynamic enable/disable is a Non-requirement -- edit the config and restart).
+	int MEMORY_TRACKING_SAMPLE_INVERSE; // 0=off, N=1-in-N
+	int64_t MEMORY_TRACKING_FORCE_SAMPLE_BYTES; // always sample allocations >= this many bytes; -1 disables
+	bool MEMORY_TRACKING_LIVE_TRACKING; // when false, skip the pointer-keyed live-block table
+	double MEMORY_TRACKING_REPORT_INTERVAL; // seconds between dumps; 0 disables reporting
+	int64_t MEMORY_TRACKING_REPORT_BYTES_THRESHOLD; // sites with live bytes >= this are reported each dump (~1% of an 8
+	                                                // GB target RSS)
+	int MEMORY_TRACKING_FRAMES; // captured stack depth (1..MEMORY_TRACKER_MAX_FRAMES)
 
 	// Chaos testing
 	bool ENABLE_CHAOS_FEATURES;
@@ -184,6 +186,9 @@ public:
 	double INCOMPATIBLE_PEER_DELAY_BEFORE_LOGGING;
 	double PING_LOGGING_INTERVAL;
 	double PING_SKETCH_ACCURACY;
+	bool LOG_CONNECTION_ATTEMPTS_ENABLED;
+	int LOG_CONNECTION_INTERVAL_SECS;
+	std::string CONNECTION_LOG_DIRECTORY;
 
 	int TLS_CERT_REFRESH_DELAY_SECONDS;
 	double TLS_SERVER_CONNECTION_THROTTLE_TIMEOUT;
@@ -195,6 +200,8 @@ public:
 	int TLS_HANDSHAKE_THREAD_STACKSIZE;
 	int TLS_MALLOC_ARENA_MAX;
 	int TLS_HANDSHAKE_LIMIT;
+	bool DISABLE_MAINTHREAD_TLS_HANDSHAKE;
+	int TLS_HANDSHAKE_FLOWLOCK_PRIORITY;
 
 	int NETWORK_TEST_CLIENT_COUNT;
 	int NETWORK_TEST_REPLY_SIZE;
@@ -231,10 +238,6 @@ public:
 	int EIO_MAX_PARALLELISM;
 	int EIO_USE_ODIRECT;
 
-	// AsyncFileEncrypted
-	int ENCRYPTION_BLOCK_SIZE;
-	int MAX_DECRYPTED_BLOCKS;
-
 	// AsyncFileKAIO
 	int MAX_OUTSTANDING;
 	int MIN_SUBMIT;
@@ -248,6 +251,10 @@ public:
 	// AsyncFileNonDurable
 	double NON_DURABLE_MAX_WRITE_DELAY;
 	double MAX_PRIOR_MODIFICATION_DELAY;
+
+	// AsyncFileWriteChecker
+	double ASYNC_FILE_WRITE_CHEKCER_LOGGING_INTERVAL;
+	double ASYNC_FILE_WRITE_CHEKCER_CHECKING_DELAY;
 
 	// GenericActors
 	double BUGGIFY_FLOW_LOCK_RELEASE_DELAY;
@@ -286,6 +293,7 @@ public:
 	int MIN_PACKET_BUFFER_FREE_BYTES;
 	int FLOW_TCP_NODELAY;
 	int FLOW_TCP_QUICKACK;
+	bool RESOLVE_PREFER_IPV4_ADDR;
 
 	// Sim2
 	// FIMXE: more parameters could be factored out
@@ -300,6 +308,7 @@ public:
 	double MAX_BUGGIFIED_DELAY;
 	double MAX_RUNLOOP_SLEEP_DELAY;
 	int SIM_CONNECT_ERROR_MODE;
+	double SIM_DNS_REMOVAL_MAX_DELAY;
 	double SIM_SPEEDUP_AFTER_SECONDS;
 	int MAX_TRACE_LINES;
 
@@ -363,6 +372,10 @@ public:
 	bool LOAD_BALANCE_TSS_MISMATCH_VERIFY_SS;
 	bool LOAD_BALANCE_TSS_MISMATCH_TRACE_FULL;
 	int TSS_LARGE_TRACE_SIZE;
+	double LOAD_BALANCE_FETCH_REPLICA_TIMEOUT;
+	bool ENABLE_REPLICA_CONSISTENCY_CHECK_ON_READS;
+	int READ_CONSISTENCY_CHECK_REQUIRED_REPLICAS;
+	bool ENABLE_WARNING_READ_CONSISTENCY_CHECK_NOT_ENOUGH_REPLICA;
 
 	// Health Monitor
 	int FAILURE_DETECTION_DELAY;
@@ -387,7 +400,7 @@ public:
 	int RESTCLIENT_MAX_CONNECTIONPOOL_SIZE;
 	int RESTCLIENT_CONNECT_TRIES;
 	int RESTCLIENT_CONNECT_TIMEOUT;
-	int RESTCLIENT_MAX_CONNECTION_LIFE;
+	int RESTCLIENT_MAX_CONNECTION_LIFE; // Not implemented yet.
 	int RESTCLIENT_REQUEST_TRIES;
 	int RESTCLIENT_REQUEST_TIMEOUT_SEC;
 	int REST_LOG_LEVEL;
@@ -399,5 +412,6 @@ public:
 // Flow knobs are needed before the knob collections are available, so a global FlowKnobs object is used to bootstrap
 extern FlowKnobs bootstrapGlobalFlowKnobs;
 extern FlowKnobs const* FLOW_KNOBS;
+void resetFlowKnobs(class Randomize randomize, class IsSimulated isSimulated);
 
 #endif

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -53,9 +53,8 @@ struct OrContext {
 };
 
 template <class Left, class Right>
-constexpr std::enable_if_t<Left::type == AnnotationType::Context && Right::type == AnnotationType::Context,
-                           OrContext<Left, Right>>
-operator|(Left const& lhs, Right const& rhs) {
+    requires(Left::type == AnnotationType::Context && Right::type == AnnotationType::Context)
+constexpr OrContext<Left, Right> operator|(Left const& lhs, Right const& rhs) {
 	return OrContext<Left, Right>(lhs, rhs);
 }
 
@@ -75,14 +74,14 @@ template <class Left, class Right>
 struct AssertOr {
 	typename std::remove_const<Left>::type left;
 	typename std::remove_const<Right>::type right;
-	constexpr AssertOr() {}
+	constexpr AssertOr() = default;
 	constexpr bool operator()(ICodeProbe* self) const { return left(self) || right(self); }
 };
 template <class Left, class Right>
 struct AssertAnd {
 	typename std::remove_const<Left>::type left;
 	typename std::remove_const<Right>::type right;
-	constexpr AssertAnd() {}
+	constexpr AssertAnd() = default;
 	constexpr bool operator()(ICodeProbe* self) const { return left(self) && right(self); }
 };
 template <class T>
@@ -92,20 +91,19 @@ struct AssertNot {
 };
 
 template <class Left, class Right>
-constexpr std::enable_if_t<Left::type == AnnotationType::Assertion && Right::type == AnnotationType::Assertion,
-                           AssertOr<Left, Right>>
-operator||(Left const& lhs, Right const& rhs) {
+    requires(Left::type == AnnotationType::Assertion && Right::type == AnnotationType::Assertion)
+constexpr AssertOr<Left, Right> operator||(Left const& lhs, Right const& rhs) {
 	return AssertOr<Left, Right>();
 }
 template <class Left, class Right>
-constexpr std::enable_if_t<Left::type == AnnotationType::Assertion && Right::type == AnnotationType::Assertion,
-                           AssertAnd<Left, Right>>
-operator&&(Left const& lhs, Right const& rhs) {
+    requires(Left::type == AnnotationType::Assertion && Right::type == AnnotationType::Assertion)
+constexpr AssertAnd<Left, Right> operator&&(Left const& lhs, Right const& rhs) {
 	return AssertAnd<Left, Right>();
 }
 
 template <class T>
-constexpr std::enable_if_t<T::type == AnnotationType::Assertion, AssertNot<T>> operator!(T const&) {
+    requires(T::type == AnnotationType::Assertion)
+constexpr AssertNot<T> operator!(T const&) {
 	return AssertNot<T>();
 }
 
@@ -304,16 +302,24 @@ CodeProbeImpl<FileName, Condition, Comment, CompUnit, Line, CodeProbeAnnotations
 
 #define _CODE_PROBE_IMPL(file, line, condition, comment, compUnit, fileType, condType, commentType, compUnitType, ...) \
 	struct fileType {                                                                                                  \
-		constexpr static const char* value() { return file; }                                                          \
+		constexpr static const char* value() {                                                                         \
+			return file;                                                                                               \
+		}                                                                                                              \
 	};                                                                                                                 \
 	struct condType {                                                                                                  \
-		constexpr static const char* value() { return #condition; }                                                    \
+		constexpr static const char* value() {                                                                         \
+			return #condition;                                                                                         \
+		}                                                                                                              \
 	};                                                                                                                 \
 	struct commentType {                                                                                               \
-		constexpr static const char* value() { return comment; }                                                       \
+		constexpr static const char* value() {                                                                         \
+			return comment;                                                                                            \
+		}                                                                                                              \
 	};                                                                                                                 \
 	struct compUnitType {                                                                                              \
-		constexpr static const char* value() { return compUnit; }                                                      \
+		constexpr static const char* value() {                                                                         \
+			return compUnit;                                                                                           \
+		}                                                                                                              \
 	};                                                                                                                 \
 	if (condition) {                                                                                                   \
 		probe::probeInstance<fileType, condType, commentType, compUnitType, line>(__VA_ARGS__).hit();                  \

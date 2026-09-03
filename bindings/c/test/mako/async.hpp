@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -109,7 +109,7 @@ struct ResumableStateForRunWorkload : std::enable_shared_from_this<ResumableStat
 		key1.resize(args.key_length);
 		key2.resize(args.key_length);
 		val.resize(args.value_length);
-		setTransactionTimeoutIfEnabled(args, tx);
+		setTransactionOptionsIfEnabled(args, tx);
 	}
 	void signalEnd() noexcept { stopcount.fetch_add(1); }
 	bool ended() noexcept { return (max_iters != -1 && total_xacts >= max_iters) || signal.load() == SIGNAL_RED; }

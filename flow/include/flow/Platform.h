@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,6 +31,11 @@
 #define FLOW_THREAD_SAFE 0
 
 #include <stdlib.h>
+#if defined(__cplusplus)
+#include <ctime>
+#else
+#include <time.h>
+#endif
 
 #define FDB_EXIT_SUCCESS 0
 #define FDB_EXIT_ERROR 1
@@ -90,6 +95,20 @@
 #error Missing force inline
 #endif
 
+// Keep a function un-inlined and (on GCC) un-cloned so its address stays stable
+// for return-address matching in tests. GCC -O3 IPA cloning (.constprop/.isra)
+// otherwise runs the code under a synthetic clone symbol at a different address
+// than &fn, so a captured frame won't fall in [&fn, &fn+size); noclone disables
+// it. clang lacks noclone and doesn't clone this way, so it gets noinline only;
+// empty elsewhere (e.g. MSVC, which we cannot compile-test).
+#if defined(__clang__)
+#define force_noinline __attribute__((noinline))
+#elif defined(__GNUC__)
+#define force_noinline __attribute__((noinline, noclone))
+#else
+#define force_noinline
+#endif
+
 /*
  * Visual Studio (.NET 2003 and beyond) has an __assume compiler
  * intrinsic to hint to the compiler that a given condition is true
@@ -130,6 +149,10 @@
 #include <memory>
 #include <functional>
 #endif
+
+template <class T>
+class AsyncResult;
+class Void;
 
 // g++ requires that non-dependent names have to be looked up at
 // template definition, which makes circular dependencies a royal
@@ -191,45 +214,65 @@ void waitThread(THREAD_HANDLE thread);
 // Linux-only for now.  Set thread priority.
 void setThreadPriority(int pri);
 
+// See
+// https://github.com/apple/foundationdb/blob/7a9217a392fdb8568b10aa430c8c55b59756b5ac/contrib/debug_determinism/README.md
+// for what this is about.
 #define DEBUG_DETERMINISM 0
 
 std::string removeWhitespace(const std::string& t);
 
-struct SystemStatistics {
-	bool initialized;
-	double elapsed;
-	double processCPUSeconds, mainThreadCPUSeconds;
-	uint64_t processMemory;
-	uint64_t processResidentMemory;
-	uint64_t processDiskTotalBytes;
-	uint64_t processDiskFreeBytes;
-	double processDiskQueueDepth;
-	double processDiskIdleSeconds;
-	double processDiskReadSeconds;
-	double processDiskWriteSeconds;
-	double processDiskRead;
-	double processDiskWrite;
-	uint64_t processDiskReadCount;
-	uint64_t processDiskWriteCount;
-	double processDiskWriteSectors;
-	double processDiskReadSectors;
-	double machineMegabitsSent;
-	double machineMegabitsReceived;
-	uint64_t machineOutSegs;
-	uint64_t machineRetransSegs;
-	double machineCPUSeconds;
-	int64_t machineTotalRAM;
-	int64_t machineCommittedRAM;
-	int64_t machineAvailableRAM;
+// Not all fields are returned on all platforms.
+// Check the implementations of getDiskStatistics to see exactly what
+// they return.
+struct DiskStatistics {
+	uint64_t currentIOs = 0;
+	uint64_t readMilliSecs = 0;
+	uint64_t writeMilliSecs = 0;
+	uint64_t IOMilliSecs = 0;
+	uint64_t reads = 0;
+	uint64_t writes = 0;
+	uint64_t readSectors = 0;
+	uint64_t writeSectors = 0;
+	uint64_t readBytes = 0;
+	uint64_t writeBytes = 0;
+};
 
-	SystemStatistics()
-	  : initialized(false), elapsed(0), processCPUSeconds(0), mainThreadCPUSeconds(0), processMemory(0),
-	    processResidentMemory(0), processDiskTotalBytes(0), processDiskFreeBytes(0), processDiskQueueDepth(0),
-	    processDiskIdleSeconds(0), processDiskReadSeconds(0), processDiskWriteSeconds(0), processDiskRead(0),
-	    processDiskWrite(0), processDiskReadCount(0), processDiskWriteCount(0), processDiskWriteSectors(0),
-	    processDiskReadSectors(0), machineMegabitsSent(0), machineMegabitsReceived(0), machineOutSegs(0),
-	    machineRetransSegs(0), machineCPUSeconds(0), machineTotalRAM(0), machineCommittedRAM(0),
-	    machineAvailableRAM(0) {}
+struct SystemStatistics {
+	bool initialized = false;
+	double elapsed = 0;
+	double processCPUSeconds = 0;
+	double mainThreadCPUSeconds = 0;
+	uint64_t processMemory = 0;
+	uint64_t processResidentMemory = 0;
+
+	// FIXME: the following are not process-specific, so the names
+	// don't make sense.
+	// FIXME: some of these are counters that just increment. Others are
+	// deltas that are computed over some recent time period.  Update the
+	// names to make it clear which are which.
+	uint64_t processDiskTotalBytes = 0;
+	uint64_t processDiskFreeBytes = 0;
+	double processDiskQueueDepth = 0;
+	double processDiskIdleSeconds = 0;
+	double processDiskReadSeconds = 0;
+	double processDiskWriteSeconds = 0;
+	double processDiskRead = 0;
+	double processDiskWrite = 0;
+	uint64_t processDiskReadCount = 0;
+	uint64_t processDiskWriteCount = 0;
+	double processDiskReadSectors = 0;
+	double processDiskWriteSectors = 0;
+	double processDiskReadBytes = 0;
+	double processDiskWriteBytes = 0;
+
+	double machineMegabitsSent = 0;
+	double machineMegabitsReceived = 0;
+	uint64_t machineOutSegs = 0;
+	uint64_t machineRetransSegs = 0;
+	double machineCPUSeconds = 0;
+	int64_t machineTotalRAM = 0;
+	int64_t machineCommittedRAM = 0;
+	int64_t machineAvailableRAM = 0;
 };
 
 struct SystemStatisticsState;
@@ -271,14 +314,7 @@ void getDiskBytes(std::string const& directory, int64_t& free, int64_t& total);
 
 void getNetworkTraffic(uint64_t& bytesSent, uint64_t& bytesReceived, uint64_t& outSegs, uint64_t& retransSegs);
 
-void getDiskStatistics(std::string const& directory,
-                       uint64_t& currentIOs,
-                       uint64_t& readMilliSecs,
-                       uint64_t& writeMilliSecs,
-                       uint64_t& IOMilliSecs,
-                       uint64_t& reads,
-                       uint64_t& writes,
-                       uint64_t& writeSectors);
+DiskStatistics getDiskStatistics(std::string const& directory);
 
 void getMachineLoad(uint64_t& idleTime, uint64_t& totalTime, bool logDetails);
 
@@ -288,7 +324,14 @@ double timer_monotonic(); // Returns a high precision monotonic clock which is a
                           // at startup, but might not be a globally accurate time.
 uint64_t timer_int(); // Return timer as uint64_t representing epoch nanoseconds
 
-void getLocalTime(const time_t* timep, struct tm* result);
+void getLocalTime(const
+#if defined(__cplusplus)
+                  std::time_t
+#else
+                  time_t
+#endif
+                      * timep,
+                  struct tm* result);
 
 // get GMT time string from an epoch seconds double
 std::string epochsToGMTString(double epochs);
@@ -316,6 +359,9 @@ bool directoryExists(std::string const& path);
 // Returns size of file in bytes
 int64_t fileSize(std::string const& filename);
 
+// Returns last modified time of the file.
+time_t fileModifiedTime(const std::string& filename);
+
 // Returns true if file is deleted, false if it was not found, throws platform_error() otherwise
 // Consider using IAsyncFileSystem::filesystem()->deleteFile() instead, especially if you need durability!
 bool deleteFile(std::string const& filename);
@@ -328,14 +374,14 @@ void atomicReplace(std::string const& path, std::string const& content, bool tex
 
 // Read a file into memory
 // This requires the file to be seekable
-std::string readFileBytes(std::string const& filename, int maxSize);
+std::string readFileBytes(std::string const& filename, size_t maxSize);
 
 // Read a file into memory supplied by the caller
 // If 'len' is greater than file size, then read the filesize bytes.
-size_t readFileBytes(std::string const& filename, uint8_t* buff, int64_t len);
+size_t readFileBytes(std::string const& filename, uint8_t* buff, size_t len);
 
 // Write data buffer into file
-void writeFileBytes(std::string const& filename, const char* data, size_t count);
+void writeFileBytes(std::string const& filename, const uint8_t* data, size_t count, bool append = false);
 
 // Write text into file
 void writeFile(std::string const& filename, std::string const& content);
@@ -398,6 +444,7 @@ std::vector<std::string> listFiles(std::string const& directory, std::string con
 std::vector<std::string> listDirectories(std::string const& directory);
 
 void findFilesRecursively(std::string const& path, std::vector<std::string>& out);
+AsyncResult<Void> findFilesRecursivelyAsync(std::string path, std::vector<std::string>* out);
 
 // Tag the given file as "temporary", i.e. not really needing commits to disk
 void makeTemporary(const char* filename);
@@ -407,17 +454,18 @@ void setCloseOnExec(int fd);
 // Logs an out of memory error and exits the program
 void outOfMemory();
 
-int getRandomSeed();
+uint64_t getRandomSeed();
+void getRandomBytes(void* buf, size_t len);
 
 bool getEnvironmentVar(const char* name, std::string& value);
 int setEnvironmentVar(const char* name, const char* value, int overwrite);
 
 std::string getWorkingDirectory();
 
-// Returns the absolute platform-dependant path for server-based files
+// Returns the absolute platform-dependent path for server-based files
 std::string getDefaultConfigPath();
 
-// Returns the absolute platform-dependant path for the default fdb.cluster file
+// Returns the absolute platform-dependent path for the default fdb.cluster file
 std::string getDefaultClusterFilePath();
 
 struct ImageInfo {
@@ -442,11 +490,12 @@ int eraseDirectoryRecursive(std::string const& directory);
 struct TmpFile {
 public:
 	TmpFile();
-	TmpFile(const std::string& tempDir);
+	explicit TmpFile(const std::string& tempDir);
 	TmpFile(const std::string& tempDir, std::string const& prefix);
 	~TmpFile();
 	size_t read(uint8_t* buff, size_t len);
 	void write(const uint8_t* buff, size_t len);
+	void append(const uint8_t* buff, size_t len);
 	bool destroyFile();
 	std::string getFileName() const { return filename; }
 
@@ -460,11 +509,11 @@ private:
 } // namespace platform
 
 #ifdef __linux__
-typedef struct {
+using ProfilingSample = struct {
 	double timestamp;
 	size_t length;
 	void* frames[];
-} ProfilingSample;
+};
 
 dev_t getDeviceId(std::string path);
 #endif
@@ -719,7 +768,6 @@ inline static void aligned_free(void* ptr) {
 }
 #elif defined(__APPLE__)
 #if !defined(HAS_ALIGNED_ALLOC)
-#include <cstdlib>
 inline static void* aligned_alloc(size_t alignment, size_t size) {
 	void* ptr = nullptr;
 	posix_memalign(&ptr, alignment, size);
@@ -803,7 +851,7 @@ int64_t getNumProfilesCaptured();
 EXTERNC void criticalError(int exitCode, const char* type, const char* message);
 EXTERNC void flushAndExit(int exitCode);
 
-// Initilization code that's run at the beginning of every entry point (except fdbmonitor)
+// Initialization code that's run at the beginning of every entry point (except fdbmonitor)
 void platformInit();
 
 // Register a callback which will run as part of the crash handler. Use in conjunction with registerCrashHandler.

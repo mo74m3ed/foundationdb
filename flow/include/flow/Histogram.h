@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -61,12 +61,12 @@ public:
 	enum class Unit { milliseconds = 0, bytes, bytes_per_second, percentageLinear, countLinear, MAXHISTOGRAMUNIT };
 	static const char* const UnitToStringMapper[];
 
-	Histogram(Reference<HistogramRegistry> regis,
-	          std::string const& group = "",
-	          std::string const& op = "",
-	          Unit unit = Unit::MAXHISTOGRAMUNIT,
-	          uint32_t lower = 0,
-	          uint32_t upper = UINT32_MAX)
+	explicit Histogram(Reference<HistogramRegistry> regis,
+	                   std::string const& group = "",
+	                   std::string const& op = "",
+	                   Unit unit = Unit::MAXHISTOGRAMUNIT,
+	                   uint32_t lower = 0,
+	                   uint32_t upper = UINT32_MAX)
 	  : group(group), op(op), unit(unit), registry(regis), lowerBound(lower), upperBound(upper) {
 
 		ASSERT(unit <= Unit::MAXHISTOGRAMUNIT);
@@ -147,7 +147,7 @@ public:
 	}
 
 	// Histogram buckets samples into one of the same sized buckets
-	// This is used when the distance b/t upperBound and lowerBound are relativly small
+	// This is used when the distance b/t upperBound and lowerBound are relatively small
 	inline void sampleRecordCounter(uint32_t sample) {
 		if (sample > upperBound) {
 			sample = upperBound;

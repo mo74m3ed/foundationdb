@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -105,14 +105,6 @@ std::unordered_map<std::string, std::function<void(const std::string& value, Tes
 	  [](const std::string& value, TestSpec* spec) { //
 	      spec->disableClientBypass = (value == "true");
 	  } },
-	{ "minTenants",
-	  [](const std::string& value, TestSpec* spec) { //
-	      processIntOption(value, "minTenants", spec->minTenants, 1, 1000);
-	  } },
-	{ "maxTenants",
-	  [](const std::string& value, TestSpec* spec) { //
-	      processIntOption(value, "maxTenants", spec->maxTenants, 1, 1000);
-	  } },
 	{ "runLoopProfiler",
 	  [](const std::string& value, TestSpec* spec) { //
 	      spec->runLoopProfiler = (value == "true");
@@ -145,7 +137,7 @@ TestSpec readTomlTestSpec(std::string fileName) {
 
 	// Then parse each test
 	const toml::array& tests = toml::find(conf, "test").as_array();
-	if (tests.size() == 0) {
+	if (tests.empty()) {
 		throw TesterError("Invalid test file. No [test] section found");
 	} else if (tests.size() > 1) {
 		throw TesterError("Invalid test file. More than one [test] section found");

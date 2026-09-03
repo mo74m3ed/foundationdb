@@ -1,15 +1,21 @@
 set(SRCS
+
   fdb/__init__.py
   fdb/directory_impl.py
   fdb/impl.py
   fdb/locality.py
-  fdb/six.py
   fdb/subspace_impl.py
-  fdb/tenant_management.py
   fdb/tuple.py
-  README.rst
-  MANIFEST.in)
 
+  fdb/apiversion.py.cmake
+
+  README.rst
+  MANIFEST.in
+
+  pyproject.toml
+)
+
+# FIXME Windows Python support at fdb/fdb_c.dll.pth
 if(APPLE)
   list(APPEND SRCS fdb/libfdb_c.dylib.pth)
 else()
@@ -34,6 +40,14 @@ foreach(src ${SRCS})
 endforeach()
 add_custom_target(python_binding ALL DEPENDS ${out_files})
 
+if(FDB_RELEASE)
+  set(FDB_PY_VERSION ${PROJECT_VERSION})
+elseif(FDB_RELEASE_CANDIDATE)
+  set(FDB_PY_VERSION "${PROJECT_VERSION}rc${FDB_RELEASE_CANDIDATE_VERSION}")
+else()
+  set(FDB_PY_VERSION "${PROJECT_VERSION}a1")
+endif()
+
 file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR}/bindings/python/fdb)
 set(options_file ${PROJECT_BINARY_DIR}/bindings/python/fdb/fdboptions.py)
 vexillographer_compile(TARGET fdb_python_options LANG python OUT ${options_file}
@@ -49,42 +63,62 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/fdb/apiversion.py.cmake ${apiversion_
 add_dependencies(python_binding fdb_python_options)
 
 set(out_files "${out_files};${options_file};${apiversion_file}")
-# TODO[mpilman]: it is not clear whether we want to have rpms for python
-#install(FILES ${out_files} DESTINATION ${FDB_PYTHON_INSTALL_DIR} COMPONENT python)
 
-# Create sdist
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/setup.py.cmake ${CMAKE_CURRENT_BINARY_DIR}/setup.py)
+# Create Python package in tar.gz format
 configure_file(${CMAKE_SOURCE_DIR}/LICENSE ${CMAKE_CURRENT_BINARY_DIR}/LICENSE COPYONLY)
-find_program(pycodestyle pycodestyle)
-if (pycodestyle)
-  add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/check_py_code_style
-    COMMAND ${pycodestyle} bindings/python --config=${CMAKE_CURRENT_SOURCE_DIR}/setup.cfg &&
-            ${CMAKE_COMMAND} -E ${CMAKE_CURRENT_BINARY_DIR}/check_py_code_style
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    DEPENDS ${out_files}
-    COMMENT "Check python code style")
-  add_custom_target(fdb_python_check DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/check_py_code_style)
-else()
-  add_custom_target(fdb_python_check COMMAND ${CMAKE_COMMAND} -E echo "Skipped Python style check! Missing: pycodestyle")
-endif()
-if(NOT FDB_RELEASE)
-  set(not_fdb_release_string "a1")
-else()
-  set(not_fdb_release_string "")
-endif()
-set(setup_file_name foundationdb-${FDB_VERSION}.tar.gz)
-set(package_file ${CMAKE_BINARY_DIR}/packages/foundationdb-${FDB_VERSION}${not_fdb_release_string}.tar.gz)
-add_custom_command(OUTPUT ${package_file}
-  COMMAND $<TARGET_FILE:Python3::Interpreter> setup.py sdist --formats=gztar &&
-          ${CMAKE_COMMAND} -E copy dist/${setup_file_name} ${package_file}
+
+add_test(
+  NAME              python_pycodestyle
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-  COMMENT "Create Python sdist package")
-add_custom_target(python_package DEPENDS ${package_file})
+  COMMAND sh -c "
+    if ! which pycodestyle >/dev/null; then
+      exit 66
+    fi
+    pycodestyle . --config=${CMAKE_CURRENT_SOURCE_DIR}/pycodestyle.cfg
+    "
+)
+set_tests_properties(python_pycodestyle PROPERTIES SKIP_RETURN_CODE 66)
+
+set(setup_file_name foundationdb-${FDB_PY_VERSION}.tar.gz)
+set(wheel_file_name foundationdb-${FDB_PY_VERSION}-py3-none-any.whl)
+set(package_file       ${CMAKE_BINARY_DIR}/packages/${setup_file_name})
+set(wheel_package_file ${CMAKE_BINARY_DIR}/packages/${wheel_file_name})
+
+# Build both source distribution and wheel
+# Note: foundationdb is a pure Python package (uses ctypes), so wheel is py3-none-any
+set(PYPKG_VENV_DIR "${CMAKE_BINARY_DIR}/pypkg-venv")
+set(PYPKG_PY3       ${Python3_EXECUTABLE})
+execute_process(
+  COMMAND         ${PYPKG_PY3} -m build --version
+  RESULT_VARIABLE PY_BUILD_STATUS
+  OUTPUT_VARIABLE PY_BUILD_OUTPUT
+  ERROR_VARIABLE  PY_BUILD_OUTPUT
+)
+if(PY_BUILD_STATUS EQUAL 0)
+  message(STATUS "Found python ${PY_BUILD_OUTPUT}")
+else()
+  message(STATUS "Setting up python pkg build virtual environment")
+  execute_process(COMMAND ${Python3_EXECUTABLE} -m venv ${PYPKG_VENV_DIR} COMMAND_ERROR_IS_FATAL ANY)
+  find_program(
+    VENV_Python3_EXECUTABLE
+    NAMES python3 python3.exe python.exe
+    PATHS ${PYPKG_VENV_DIR}/Scripts ${PYPKG_VENV_DIR}/bin
+    REQUIRED NO_DEFAULT_PATH NO_CACHE
+    DOC "Checking Python3 executable in virtual environment")
+  set(PYPKG_PY3 ${VENV_Python3_EXECUTABLE})
+  execute_process(COMMAND "${PYPKG_PY3}" -m pip install build COMMAND_ERROR_IS_FATAL ANY)
+endif()
+add_custom_command(OUTPUT ${package_file} ${wheel_package_file}
+  COMMAND ${PYPKG_PY3} -m build --sdist --wheel
+  COMMAND ${CMAKE_COMMAND} -E copy dist/${setup_file_name} ${package_file}
+  COMMAND ${CMAKE_COMMAND} -E copy dist/${wheel_file_name} ${wheel_package_file}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  COMMENT "Create Python source distribution and wheel")
+add_custom_target(python_package DEPENDS ${package_file} ${wheel_package_file})
 add_dependencies(python_package python_binding)
 add_dependencies(packages python_package)
 
 if(NOT OPEN_FOR_IDE AND NOT USE_SANITIZER)
-
   add_fdbclient_test(
     NAME python_unit_tests
     COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit_tests.py
@@ -92,4 +126,22 @@ if(NOT OPEN_FOR_IDE AND NOT USE_SANITIZER)
     DISABLE_LOG_DUMP
   )
 
+  # FIXME Windows support
+  set(PYPKG_TEST_DIR "${CMAKE_BINARY_DIR}/pypkg-test-venv")
+  set(PYPKG_TEST_PY3 "${PYPKG_TEST_DIR}/bin/python3")
+  add_test(
+    NAME python_package_test
+    COMMAND sh -c "
+      set -e
+      if ! [ -f '${package_file}' ]; then
+        exit 66
+      fi
+      ${Python3_EXECUTABLE} -m venv ${PYPKG_TEST_DIR}
+      ${PYPKG_TEST_PY3} -m pip install '${package_file}'
+      ${PYPKG_TEST_PY3} -c 'import fdb'
+      ${PYPKG_TEST_PY3} -m pip install '${wheel_package_file}'
+      ${PYPKG_TEST_PY3} -c 'import fdb'
+    "
+  )
+  set_tests_properties(python_package_test PROPERTIES SKIP_RETURN_CODE 66)
 endif() # NOT OPEN_FOR_IDE AND NOT USE_SANITIZER

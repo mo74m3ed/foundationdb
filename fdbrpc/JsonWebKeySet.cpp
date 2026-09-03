@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,12 +25,9 @@
 #include "flow/MkCert.h"
 #include "flow/PKey.h"
 #include "flow/UnitTest.h"
-#include "fdbrpc/Base64Encode.h"
-#include "fdbrpc/Base64Decode.h"
-#include "fdbrpc/JsonWebKeySet.h"
-#if defined(HAVE_WOLFSSL)
-#include <wolfssl/options.h>
-#endif
+#include "Base64Encode.h"
+#include "Base64Decode.h"
+#include "JsonWebKeySet.h"
 #include <openssl/bn.h>
 #include <openssl/ec.h>
 #include <openssl/err.h>

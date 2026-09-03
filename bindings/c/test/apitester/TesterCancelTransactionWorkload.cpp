@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ namespace FdbApiTester {
 
 class CancelTransactionWorkload : public ApiWorkload {
 public:
-	CancelTransactionWorkload(const WorkloadConfig& config) : ApiWorkload(config) {}
+	explicit CancelTransactionWorkload(const WorkloadConfig& config) : ApiWorkload(config) {}
 
 private:
 	enum OpType { OP_CANCEL_GET, OP_CANCEL_AFTER_FIRST_GET, OP_LAST = OP_CANCEL_AFTER_FIRST_GET };

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,25 +23,26 @@
 #pragma once
 
 #include "fdbclient/Audit.h"
+#include "fdbclient/BulkDumping.h"
 #include "fdbclient/FDBTypes.h"
 #include "fdbclient/StorageCheckpoint.h"
 #include "fdbclient/StorageServerShard.h"
+#include "fdbclient/VersionedMap.h"
 #include "fdbrpc/Locality.h"
 #include "fdbrpc/QueueModel.h"
 #include "fdbrpc/fdbrpc.h"
-#include "fdbrpc/LoadBalance.actor.h"
+#include "fdbrpc/LoadBalance.h"
 #include "fdbrpc/Stats.h"
 #include "fdbrpc/TimedRequest.h"
-#include "fdbrpc/TenantInfo.h"
-#include "fdbrpc/TSSComparison.h"
+#include "fdbclient/TSSComparison.h"
 #include "fdbclient/CommitTransaction.h"
-#include "fdbclient/TagThrottle.actor.h"
-#include "fdbclient/Tenant.h"
+#include "fdbclient/TagThrottle.h"
 #include "fdbclient/Tracing.h"
 #include "flow/UnitTest.h"
 #include "fdbclient/VersionVector.h"
 
 // Dead code, removed in the next protocol version
+// FIXME: assess removal of unneeded protocol related types.
 struct VersionReply {
 	constexpr static FileIdentifier file_identifier = 3;
 
@@ -123,8 +124,12 @@ struct StorageServerInterface {
 	RequestStream<struct FetchCheckpointKeyValuesRequest> fetchCheckpointKeyValues;
 	RequestStream<struct UpdateCommitCostRequest> updateCommitCostRequest;
 	RequestStream<struct AuditStorageRequest> auditStorage;
+	RequestStream<struct GetHotShardsRequest> getHotShards;
+	RequestStream<struct GetStorageCheckSumRequest> getCheckSum;
+	RequestStream<struct BulkDumpRequest> bulkdump;
 
 private:
+	void initEndpointsFromGetValue();
 	bool acceptingRequests;
 
 public:
@@ -145,113 +150,19 @@ public:
 		// To change this serialization, ProtocolVersion::ServerListValue must be updated, and downgrades need to be
 		// considered
 
-		if (ar.protocolVersion().hasSmallEndpoints()) {
-			if (ar.protocolVersion().hasTSS()) {
-				if (ar.protocolVersion().hasStorageInterfaceReadiness()) {
-					serializer(ar, uniqueID, locality, getValue, tssPairID, acceptingRequests);
-				} else {
-					serializer(ar, uniqueID, locality, getValue, tssPairID);
-				}
-			} else {
-				serializer(ar, uniqueID, locality, getValue);
-			}
-			if (Ar::isDeserializing) {
-				getKey = PublicRequestStream<struct GetKeyRequest>(getValue.getEndpoint().getAdjustedEndpoint(1));
-				getKeyValues =
-				    PublicRequestStream<struct GetKeyValuesRequest>(getValue.getEndpoint().getAdjustedEndpoint(2));
-				getShardState =
-				    RequestStream<struct GetShardStateRequest>(getValue.getEndpoint().getAdjustedEndpoint(3));
-				waitMetrics =
-				    PublicRequestStream<struct WaitMetricsRequest>(getValue.getEndpoint().getAdjustedEndpoint(4));
-				splitMetrics = RequestStream<struct SplitMetricsRequest>(getValue.getEndpoint().getAdjustedEndpoint(5));
-				getStorageMetrics =
-				    RequestStream<struct GetStorageMetricsRequest>(getValue.getEndpoint().getAdjustedEndpoint(6));
-				waitFailure = RequestStream<ReplyPromise<Void>>(getValue.getEndpoint().getAdjustedEndpoint(7));
-				getQueuingMetrics =
-				    RequestStream<struct StorageQueuingMetricsRequest>(getValue.getEndpoint().getAdjustedEndpoint(8));
-				getKeyValueStoreType =
-				    RequestStream<ReplyPromise<KeyValueStoreType>>(getValue.getEndpoint().getAdjustedEndpoint(9));
-				watchValue =
-				    PublicRequestStream<struct WatchValueRequest>(getValue.getEndpoint().getAdjustedEndpoint(10));
-				getReadHotRanges =
-				    RequestStream<struct ReadHotSubRangeRequest>(getValue.getEndpoint().getAdjustedEndpoint(11));
-				getRangeSplitPoints =
-				    RequestStream<struct SplitRangeRequest>(getValue.getEndpoint().getAdjustedEndpoint(12));
-				getKeyValuesStream = PublicRequestStream<struct GetKeyValuesStreamRequest>(
-				    getValue.getEndpoint().getAdjustedEndpoint(13));
-				getMappedKeyValues = PublicRequestStream<struct GetMappedKeyValuesRequest>(
-				    getValue.getEndpoint().getAdjustedEndpoint(14));
-				changeFeedStream =
-				    RequestStream<struct ChangeFeedStreamRequest>(getValue.getEndpoint().getAdjustedEndpoint(15));
-				overlappingChangeFeeds =
-				    RequestStream<struct OverlappingChangeFeedsRequest>(getValue.getEndpoint().getAdjustedEndpoint(16));
-				changeFeedPop =
-				    RequestStream<struct ChangeFeedPopRequest>(getValue.getEndpoint().getAdjustedEndpoint(17));
-				changeFeedVersionUpdate = RequestStream<struct ChangeFeedVersionUpdateRequest>(
-				    getValue.getEndpoint().getAdjustedEndpoint(18));
-				checkpoint = RequestStream<struct GetCheckpointRequest>(getValue.getEndpoint().getAdjustedEndpoint(19));
-				fetchCheckpoint =
-				    RequestStream<struct FetchCheckpointRequest>(getValue.getEndpoint().getAdjustedEndpoint(20));
-				fetchCheckpointKeyValues = RequestStream<struct FetchCheckpointKeyValuesRequest>(
-				    getValue.getEndpoint().getAdjustedEndpoint(21));
-				updateCommitCostRequest =
-				    RequestStream<struct UpdateCommitCostRequest>(getValue.getEndpoint().getAdjustedEndpoint(22));
-				auditStorage =
-				    RequestStream<struct AuditStorageRequest>(getValue.getEndpoint().getAdjustedEndpoint(23));
-			}
-		} else {
-			ASSERT(Ar::isDeserializing);
-			if constexpr (is_fb_function<Ar>) {
-				ASSERT(false);
-			}
-			serializer(ar,
-			           uniqueID,
-			           locality,
-			           getValue,
-			           getKey,
-			           getKeyValues,
-			           getShardState,
-			           waitMetrics,
-			           splitMetrics,
-			           getStorageMetrics,
-			           waitFailure,
-			           getQueuingMetrics,
-			           getKeyValueStoreType);
-			if (ar.protocolVersion().hasWatches()) {
-				serializer(ar, watchValue);
-			}
+		ASSERT_WE_THINK(ar.protocolVersion().hasSmallEndpoints()); // 6.3
+		ASSERT_WE_THINK(ar.protocolVersion().hasTSS()); // 7.0
+		ASSERT_WE_THINK(ar.protocolVersion().hasStorageInterfaceReadiness()); // 7.1
+
+		serializer(ar, uniqueID, locality, getValue, tssPairID, acceptingRequests);
+
+		if (Ar::isDeserializing) {
+			initEndpointsFromGetValue();
 		}
 	}
 	bool operator==(StorageServerInterface const& s) const { return uniqueID == s.uniqueID; }
 	bool operator<(StorageServerInterface const& s) const { return uniqueID < s.uniqueID; }
-	void initEndpoints() {
-		std::vector<std::pair<FlowReceiver*, TaskPriority>> streams;
-		streams.push_back(getValue.getReceiver(TaskPriority::LoadBalancedEndpoint));
-		streams.push_back(getKey.getReceiver(TaskPriority::LoadBalancedEndpoint));
-		streams.push_back(getKeyValues.getReceiver(TaskPriority::LoadBalancedEndpoint));
-		streams.push_back(getShardState.getReceiver());
-		streams.push_back(waitMetrics.getReceiver());
-		streams.push_back(splitMetrics.getReceiver());
-		streams.push_back(getStorageMetrics.getReceiver());
-		streams.push_back(waitFailure.getReceiver());
-		streams.push_back(getQueuingMetrics.getReceiver());
-		streams.push_back(getKeyValueStoreType.getReceiver());
-		streams.push_back(watchValue.getReceiver());
-		streams.push_back(getReadHotRanges.getReceiver());
-		streams.push_back(getRangeSplitPoints.getReceiver());
-		streams.push_back(getKeyValuesStream.getReceiver(TaskPriority::LoadBalancedEndpoint));
-		streams.push_back(getMappedKeyValues.getReceiver(TaskPriority::LoadBalancedEndpoint));
-		streams.push_back(changeFeedStream.getReceiver());
-		streams.push_back(overlappingChangeFeeds.getReceiver());
-		streams.push_back(changeFeedPop.getReceiver());
-		streams.push_back(changeFeedVersionUpdate.getReceiver());
-		streams.push_back(checkpoint.getReceiver());
-		streams.push_back(fetchCheckpoint.getReceiver());
-		streams.push_back(fetchCheckpointKeyValues.getReceiver());
-		streams.push_back(updateCommitCostRequest.getReceiver());
-		streams.push_back(auditStorage.getReceiver());
-		FlowTransport::transport().addEndpoints(streams);
-	}
+	void initEndpoints();
 };
 
 struct StorageInfo : NonCopyable, public ReferenceCounted<StorageInfo> {
@@ -260,13 +171,21 @@ struct StorageInfo : NonCopyable, public ReferenceCounted<StorageInfo> {
 	StorageInfo() : tag(invalidTag) {}
 };
 
+struct StorageServerMetaInfo : public StorageServerInterface {
+	Optional<StorageMetadataType> metadata;
+
+	explicit StorageServerMetaInfo(const StorageServerInterface& interface,
+	                               Optional<StorageMetadataType> metadata = Optional<StorageMetadataType>())
+	  : StorageServerInterface(interface), metadata(metadata) {}
+};
+
 struct ServerCacheInfo {
 	std::vector<Tag> tags; // all tags in both primary and remote DC for the key-range
 	std::vector<Reference<StorageInfo>> src_info;
 	std::vector<Reference<StorageInfo>> dest_info;
 
 	void populateTags() {
-		if (tags.size())
+		if (!tags.empty())
 			return;
 
 		for (const auto& info : src_info) {
@@ -296,7 +215,6 @@ struct GetValueReply : public LoadBalancedReply {
 struct GetValueRequest : TimedRequest {
 	constexpr static FileIdentifier file_identifier = 8454530;
 	SpanContext spanContext;
-	TenantInfo tenantInfo;
 	Key key;
 	Version version;
 	Optional<TagSet> tags;
@@ -305,23 +223,22 @@ struct GetValueRequest : TimedRequest {
 	VersionVector ssLatestCommitVersions; // includes the latest commit versions, as known
 	                                      // to this client, of all storage replicas that
 	                                      // serve the given key
-	GetValueRequest() {}
+	GetValueRequest() = default;
 
-	bool verify() const { return tenantInfo.isAuthorized(); }
+	bool verify() const { return true; }
 
 	GetValueRequest(SpanContext spanContext,
-	                const TenantInfo& tenantInfo,
 	                const Key& key,
 	                Version ver,
 	                Optional<TagSet> tags,
 	                Optional<ReadOptions> options,
 	                VersionVector latestCommitVersions)
-	  : spanContext(spanContext), tenantInfo(tenantInfo), key(key), version(ver), tags(tags), options(options),
+	  : spanContext(spanContext), key(key), version(ver), tags(tags), options(options),
 	    ssLatestCommitVersions(latestCommitVersions) {}
 
 	template <class Ar>
 	void serialize(Ar& ar) {
-		serializer(ar, key, version, tags, reply, spanContext, tenantInfo, options, ssLatestCommitVersions);
+		serializer(ar, key, version, tags, reply, spanContext, options, ssLatestCommitVersions);
 	}
 };
 
@@ -342,7 +259,6 @@ struct WatchValueReply {
 struct WatchValueRequest {
 	constexpr static FileIdentifier file_identifier = 14747733;
 	SpanContext spanContext;
-	TenantInfo tenantInfo;
 	Key key;
 	Optional<Value> value;
 	Version version;
@@ -350,23 +266,21 @@ struct WatchValueRequest {
 	Optional<UID> debugID;
 	ReplyPromise<WatchValueReply> reply;
 
-	WatchValueRequest() {}
+	WatchValueRequest() = default;
+
+	bool verify() const { return true; }
 
 	WatchValueRequest(SpanContext spanContext,
-	                  TenantInfo tenantInfo,
 	                  const Key& key,
 	                  Optional<Value> value,
 	                  Version ver,
 	                  Optional<TagSet> tags,
 	                  Optional<UID> debugID)
-	  : spanContext(spanContext), tenantInfo(tenantInfo), key(key), value(value), version(ver), tags(tags),
-	    debugID(debugID) {}
-
-	bool verify() const { return tenantInfo.isAuthorized(); }
+	  : spanContext(spanContext), key(key), value(value), version(ver), tags(tags), debugID(debugID) {}
 
 	template <class Ar>
 	void serialize(Ar& ar) {
-		serializer(ar, key, value, version, tags, debugID, reply, spanContext, tenantInfo);
+		serializer(ar, key, value, version, tags, debugID, reply, spanContext);
 	}
 };
 
@@ -390,7 +304,6 @@ struct GetKeyValuesRequest : TimedRequest {
 	constexpr static FileIdentifier file_identifier = 6795746;
 	SpanContext spanContext;
 	Arena arena;
-	TenantInfo tenantInfo;
 	KeySelectorRef begin, end;
 	// This is a dummy field there has never been used.
 	// TODO: Get rid of this by constexpr or other template magic in getRange
@@ -403,10 +316,11 @@ struct GetKeyValuesRequest : TimedRequest {
 	VersionVector ssLatestCommitVersions; // includes the latest commit versions, as known
 	                                      // to this client, of all storage replicas that
 	                                      // serve the given key
+	Optional<TaskPriority> taskID; // includes the information about read purpose
 
-	GetKeyValuesRequest() {}
+	GetKeyValuesRequest() = default;
 
-	bool verify() const { return tenantInfo.isAuthorized(); }
+	bool verify() const { return true; }
 
 	template <class Ar>
 	void serialize(Ar& ar) {
@@ -419,9 +333,9 @@ struct GetKeyValuesRequest : TimedRequest {
 		           tags,
 		           reply,
 		           spanContext,
-		           tenantInfo,
 		           options,
 		           ssLatestCommitVersions,
+		           taskID,
 		           arena);
 	}
 };
@@ -448,22 +362,21 @@ struct GetMappedKeyValuesRequest : TimedRequest {
 	constexpr static FileIdentifier file_identifier = 6795747;
 	SpanContext spanContext;
 	Arena arena;
-	TenantInfo tenantInfo;
 	KeySelectorRef begin, end;
 	KeyRef mapper;
 	Version version; // or latestVersion
 	int limit, limitBytes;
-	int matchIndex;
 	Optional<TagSet> tags;
 	Optional<ReadOptions> options;
 	ReplyPromise<GetMappedKeyValuesReply> reply;
 	VersionVector ssLatestCommitVersions; // includes the latest commit versions, as known
 	                                      // to this client, of all storage replicas that
 	                                      // serve the given key range
+	Optional<TaskPriority> taskID; // includes the information about read purpose
 
-	GetMappedKeyValuesRequest() {}
+	GetMappedKeyValuesRequest() = default;
 
-	bool verify() const { return tenantInfo.isAuthorized(); }
+	bool verify() const { return true; }
 
 	template <class Ar>
 	void serialize(Ar& ar) {
@@ -477,10 +390,9 @@ struct GetMappedKeyValuesRequest : TimedRequest {
 		           tags,
 		           reply,
 		           spanContext,
-		           tenantInfo,
 		           options,
 		           ssLatestCommitVersions,
-		           matchIndex,
+		           taskID,
 		           arena);
 	}
 };
@@ -494,7 +406,7 @@ struct GetKeyValuesStreamReply : public ReplyPromiseStreamReply {
 	bool cached = false;
 
 	GetKeyValuesStreamReply() : version(invalidVersion), more(false), cached(false) {}
-	GetKeyValuesStreamReply(GetKeyValuesReply r)
+	explicit GetKeyValuesStreamReply(GetKeyValuesReply r)
 	  : arena(r.arena), data(r.data), version(r.version), more(r.more), cached(r.cached) {}
 
 	int expectedSize() const { return sizeof(GetKeyValuesStreamReply) + data.expectedSize(); }
@@ -516,7 +428,6 @@ struct GetKeyValuesStreamRequest {
 	constexpr static FileIdentifier file_identifier = 6795746;
 	SpanContext spanContext;
 	Arena arena;
-	TenantInfo tenantInfo;
 	KeySelectorRef begin, end;
 	Version version; // or latestVersion
 	int limit, limitBytes;
@@ -527,9 +438,9 @@ struct GetKeyValuesStreamRequest {
 	                                      // to this client, of all storage replicas that
 	                                      // serve the given key range
 
-	GetKeyValuesStreamRequest() {}
+	GetKeyValuesStreamRequest() = default;
 
-	bool verify() const { return tenantInfo.isAuthorized(); }
+	bool verify() const { return true; }
 
 	template <class Ar>
 	void serialize(Ar& ar) {
@@ -542,7 +453,6 @@ struct GetKeyValuesStreamRequest {
 		           tags,
 		           reply,
 		           spanContext,
-		           tenantInfo,
 		           options,
 		           ssLatestCommitVersions,
 		           arena);
@@ -567,7 +477,6 @@ struct GetKeyRequest : TimedRequest {
 	constexpr static FileIdentifier file_identifier = 10457870;
 	SpanContext spanContext;
 	Arena arena;
-	TenantInfo tenantInfo;
 	KeySelectorRef sel;
 	Version version; // or latestVersion
 	Optional<TagSet> tags;
@@ -577,23 +486,22 @@ struct GetKeyRequest : TimedRequest {
 	                                      // to this client, of all storage replicas that
 	                                      // serve the given key
 
-	GetKeyRequest() {}
+	GetKeyRequest() = default;
 
-	bool verify() const { return tenantInfo.isAuthorized(); }
+	bool verify() const { return true; }
 
 	GetKeyRequest(SpanContext spanContext,
-	              TenantInfo tenantInfo,
 	              KeySelectorRef const& sel,
 	              Version version,
 	              Optional<TagSet> tags,
 	              Optional<ReadOptions> options,
 	              VersionVector latestCommitVersions)
-	  : spanContext(spanContext), tenantInfo(tenantInfo), sel(sel), version(version), tags(tags), options(options),
+	  : spanContext(spanContext), sel(sel), version(version), tags(tags), options(options),
 	    ssLatestCommitVersions(latestCommitVersions) {}
 
 	template <class Ar>
 	void serialize(Ar& ar) {
-		serializer(ar, sel, version, tags, reply, spanContext, tenantInfo, options, ssLatestCommitVersions, arena);
+		serializer(ar, sel, version, tags, reply, spanContext, options, ssLatestCommitVersions, arena);
 	}
 };
 
@@ -727,27 +635,22 @@ struct WaitMetricsRequest {
 	// Send a reversed range for min, max to receive an immediate report
 	constexpr static FileIdentifier file_identifier = 1795961;
 	Arena arena;
-	// Setting the tenantInfo makes the request tenant-aware.
-	TenantInfo tenantInfo;
-	// Set `minVersion` to a version where the tenant info was read. Not needed for non-tenant-aware request.
-	Version minVersion = 0;
 	KeyRangeRef keys;
 	StorageMetrics min, max;
 	ReplyPromise<StorageMetrics> reply;
+	// TODO(gglass): this was tenant related.  See about removing it.
+	Version legacyVersion;
 
-	bool verify() const { return tenantInfo.isAuthorized(); }
+	WaitMetricsRequest() = default;
 
-	WaitMetricsRequest() {}
-	WaitMetricsRequest(TenantInfo tenantInfo,
-	                   Version minVersion,
-	                   KeyRangeRef const& keys,
-	                   StorageMetrics const& min,
-	                   StorageMetrics const& max)
-	  : tenantInfo(tenantInfo), minVersion(minVersion), keys(arena, keys), min(min), max(max) {}
+	bool verify() const { return true; }
+
+	WaitMetricsRequest(Version version, KeyRangeRef const& keys, StorageMetrics const& min, StorageMetrics const& max)
+	  : keys(arena, keys), min(min), max(max), legacyVersion(version) {}
 
 	template <class Ar>
 	void serialize(Ar& ar) {
-		serializer(ar, keys, min, max, reply, tenantInfo, minVersion, arena);
+		serializer(ar, keys, min, max, reply, legacyVersion, arena);
 	}
 };
 
@@ -774,7 +677,9 @@ struct SplitMetricsRequest {
 	ReplyPromise<SplitMetricsReply> reply;
 	Optional<int> minSplitBytes;
 
-	SplitMetricsRequest() {}
+	bool verify() const { return true; }
+
+	SplitMetricsRequest() = default;
 	SplitMetricsRequest(KeyRangeRef const& keys,
 	                    StorageMetrics const& limits,
 	                    StorageMetrics const& used,
@@ -846,8 +751,8 @@ struct ReadHotSubRangeRequest {
 	uint8_t type = SplitType::BYTES;
 	int chunkCount = 1;
 
-	ReadHotSubRangeRequest() {}
-	ReadHotSubRangeRequest(KeyRangeRef const& keys, SplitType type = SplitType::BYTES, int chunkCount = 1)
+	ReadHotSubRangeRequest() = default;
+	explicit ReadHotSubRangeRequest(KeyRangeRef const& keys, SplitType type = SplitType::BYTES, int chunkCount = 1)
 	  : keys(arena, keys), type(type), chunkCount(chunkCount) {}
 
 	template <class Ar>
@@ -859,7 +764,7 @@ struct ReadHotSubRangeRequest {
 struct SplitRangeReply {
 	constexpr static FileIdentifier file_identifier = 11813134;
 	// If the given range can be divided, contains the split points.
-	// If the given range cannot be divided(for exmaple its total size is smaller than the chunk size), this would be
+	// If the given range cannot be divided(for example its total size is smaller than the chunk size), this would be
 	// empty
 	Standalone<VectorRef<KeyRef>> splitPoints;
 
@@ -872,18 +777,18 @@ struct SplitRangeReply {
 struct SplitRangeRequest {
 	constexpr static FileIdentifier file_identifier = 10725174;
 	Arena arena;
-	TenantInfo tenantInfo;
 	KeyRangeRef keys;
 	int64_t chunkSize;
+	int limit = -1;
 	ReplyPromise<SplitRangeReply> reply;
 
-	SplitRangeRequest() {}
-	SplitRangeRequest(TenantInfo tenantInfo, KeyRangeRef const& keys, int64_t chunkSize)
-	  : tenantInfo(tenantInfo), keys(arena, keys), chunkSize(chunkSize) {}
+	SplitRangeRequest() = default;
+	SplitRangeRequest(KeyRangeRef const& keys, int64_t chunkSize, int limit = -1)
+	  : keys(arena, keys), chunkSize(chunkSize), limit(limit) {}
 
 	template <class Ar>
 	void serialize(Ar& ar) {
-		serializer(ar, keys, chunkSize, reply, tenantInfo, arena);
+		serializer(ar, keys, chunkSize, reply, limit, arena);
 	}
 };
 
@@ -895,7 +800,7 @@ struct ChangeFeedStreamReply : public ReplyPromiseStreamReply {
 	Version minStreamVersion = invalidVersion;
 	Version popVersion = invalidVersion;
 
-	ChangeFeedStreamReply() {}
+	ChangeFeedStreamReply() = default;
 
 	int expectedSize() const { return sizeof(ChangeFeedStreamReply) + mutations.expectedSize(); }
 
@@ -912,6 +817,8 @@ struct ChangeFeedStreamReply : public ReplyPromiseStreamReply {
 	}
 };
 
+// NOTE: This is obsolete and not used, but a RequestStream interface dependent on this
+// type is persisted in the database via StorageServerInterface, so just keep this around.
 struct ChangeFeedStreamRequest {
 	constexpr static FileIdentifier file_identifier = 6795746;
 	SpanContext spanContext;
@@ -928,7 +835,7 @@ struct ChangeFeedStreamRequest {
 
 	ReplyPromiseStream<ChangeFeedStreamReply> reply;
 
-	ChangeFeedStreamRequest() {}
+	ChangeFeedStreamRequest() = default;
 	template <class Ar>
 	void serialize(Ar& ar) {
 		serializer(ar,
@@ -947,6 +854,8 @@ struct ChangeFeedStreamRequest {
 	}
 };
 
+// NOTE: This is obsolete and not used, but a RequestStream interface dependent on this
+// type is persisted in the database via StorageServerInterface, so just keep this around.
 struct ChangeFeedPopRequest {
 	constexpr static FileIdentifier file_identifier = 10726174;
 	Key rangeID;
@@ -954,7 +863,7 @@ struct ChangeFeedPopRequest {
 	KeyRange range;
 	ReplyPromise<Void> reply;
 
-	ChangeFeedPopRequest() {}
+	ChangeFeedPopRequest() = default;
 	ChangeFeedPopRequest(Key const& rangeID, Version version, KeyRange const& range)
 	  : rangeID(rangeID), version(version), range(range) {}
 
@@ -975,7 +884,7 @@ struct GetCheckpointRequest {
 	Optional<UID> actionId;
 	ReplyPromise<CheckpointMetaData> reply;
 
-	GetCheckpointRequest() {}
+	GetCheckpointRequest() = default;
 	GetCheckpointRequest(std::vector<KeyRange> ranges,
 	                     Version version,
 	                     CheckpointFormat format,
@@ -994,8 +903,8 @@ struct FetchCheckpointReply : public ReplyPromiseStreamReply {
 	Standalone<StringRef> token; // Serialized data specific to a particular checkpoint format.
 	Standalone<StringRef> data;
 
-	FetchCheckpointReply() {}
-	FetchCheckpointReply(StringRef token) : token(token) {}
+	FetchCheckpointReply() = default;
+	explicit FetchCheckpointReply(StringRef token) : token(token) {}
 
 	int expectedSize() const { return data.expectedSize(); }
 
@@ -1052,6 +961,8 @@ struct FetchCheckpointKeyValuesRequest {
 	}
 };
 
+// NOTE: This is obsolete and not used, but a RequestStream interface dependent on this
+// type is persisted in the database via StorageServerInterface, so just keep this around.
 struct OverlappingChangeFeedEntry {
 	KeyRef feedId;
 	KeyRangeRef range;
@@ -1064,7 +975,7 @@ struct OverlappingChangeFeedEntry {
 		       stopVersion == r.stopVersion && feedMetadataVersion == r.feedMetadataVersion;
 	}
 
-	OverlappingChangeFeedEntry() {}
+	OverlappingChangeFeedEntry() = default;
 	OverlappingChangeFeedEntry(KeyRef const& feedId,
 	                           KeyRangeRef const& range,
 	                           Version emptyVersion,
@@ -1083,6 +994,8 @@ struct OverlappingChangeFeedEntry {
 	}
 };
 
+// NOTE: This is obsolete and not used, but a RequestStream interface dependent on this
+// type is persisted in the database via StorageServerInterface, so just keep this around.
 struct OverlappingChangeFeedsReply {
 	constexpr static FileIdentifier file_identifier = 11815134;
 	VectorRef<OverlappingChangeFeedEntry> feeds;
@@ -1101,13 +1014,15 @@ struct OverlappingChangeFeedsReply {
 	}
 };
 
+// NOTE: This is obsolete and not used, but a RequestStream interface dependent on this
+// type is persisted in the database via StorageServerInterface, so just keep this around.
 struct OverlappingChangeFeedsRequest {
 	constexpr static FileIdentifier file_identifier = 7228462;
 	KeyRange range;
 	Version minVersion;
 	ReplyPromise<OverlappingChangeFeedsReply> reply;
 
-	OverlappingChangeFeedsRequest() {}
+	OverlappingChangeFeedsRequest() = default;
 	explicit OverlappingChangeFeedsRequest(KeyRange const& range) : range(range) {}
 
 	template <class Ar>
@@ -1116,11 +1031,13 @@ struct OverlappingChangeFeedsRequest {
 	}
 };
 
+// NOTE: This is obsolete and not used, but a RequestStream interface dependent on this
+// type is persisted in the database via StorageServerInterface, so just keep this around.
 struct ChangeFeedVersionUpdateReply {
 	constexpr static FileIdentifier file_identifier = 4246160;
 	Version version = 0;
 
-	ChangeFeedVersionUpdateReply() {}
+	ChangeFeedVersionUpdateReply() = default;
 	explicit ChangeFeedVersionUpdateReply(Version version) : version(version) {}
 
 	template <class Ar>
@@ -1129,12 +1046,14 @@ struct ChangeFeedVersionUpdateReply {
 	}
 };
 
+// NOTE: This is obsolete and not used, but a RequestStream interface dependent on this
+// type is persisted in the database via StorageServerInterface, so just keep this around.
 struct ChangeFeedVersionUpdateRequest {
 	constexpr static FileIdentifier file_identifier = 6795746;
 	Version minVersion;
 	ReplyPromise<ChangeFeedVersionUpdateReply> reply;
 
-	ChangeFeedVersionUpdateRequest() {}
+	ChangeFeedVersionUpdateRequest() = default;
 	explicit ChangeFeedVersionUpdateRequest(Version minVersion) : minVersion(minVersion) {}
 
 	template <class Ar>
@@ -1148,15 +1067,26 @@ struct GetStorageMetricsReply {
 	StorageMetrics load; // sum of key-value metrics (logical bytes)
 	StorageMetrics available; // physical bytes
 	StorageMetrics capacity; // physical bytes
-	double bytesInputRate;
-	int64_t versionLag;
-	double lastUpdate;
+	double bytesInputRate = 0;
+	int64_t versionLag = 0;
+	double lastUpdate = 0;
+	int64_t bytesDurable = 0, bytesInput = 0;
+	int ongoingBulkLoadTaskCount = 0;
 
-	GetStorageMetricsReply() : bytesInputRate(0) {}
+	GetStorageMetricsReply() = default;
 
 	template <class Ar>
 	void serialize(Ar& ar) {
-		serializer(ar, load, available, capacity, bytesInputRate, versionLag, lastUpdate);
+		serializer(ar,
+		           load,
+		           available,
+		           capacity,
+		           bytesInputRate,
+		           versionLag,
+		           lastUpdate,
+		           bytesDurable,
+		           bytesInput,
+		           ongoingBulkLoadTaskCount);
 	}
 };
 
@@ -1231,6 +1161,105 @@ struct StorageQueuingMetricsRequest {
 	}
 };
 
+struct GetHotShardsReply {
+	constexpr static FileIdentifier file_identifier = 3828140;
+	std::vector<KeyRange> hotShards;
+
+	GetHotShardsReply() = default;
+	explicit GetHotShardsReply(std::vector<KeyRange> hotShards) : hotShards(hotShards) {}
+
+	template <class Ar>
+	void serialize(Ar& ar) {
+		serializer(ar, hotShards);
+	}
+};
+
+struct GetHotShardsRequest {
+	constexpr static FileIdentifier file_identifier = 3828141;
+	ReplyPromise<GetHotShardsReply> reply;
+
+	GetHotShardsRequest() = default;
+
+	template <class Ar>
+	void serialize(Ar& ar) {
+		serializer(ar, reply);
+	}
+};
+
+enum class CheckSumMethod : uint8_t {
+	Invalid = 0,
+};
+
+struct CheckSumMetaData {
+	constexpr static FileIdentifier file_identifier = 3828142;
+	KeyRange range;
+	Version version;
+	StringRef checkSumValue;
+
+	CheckSumMetaData() = default;
+	CheckSumMetaData(KeyRange range, Version version, StringRef checkSumValue)
+	  : range(range), version(version), checkSumValue(checkSumValue) {}
+
+	template <class Ar>
+	void serialize(Ar& ar) {
+		serializer(ar, range, version, checkSumValue);
+	}
+};
+
+struct GetStorageCheckSumReply {
+	constexpr static FileIdentifier file_identifier = 3828143;
+	std::vector<CheckSumMetaData> checkSums;
+	uint8_t checkSumMethod;
+
+	GetStorageCheckSumReply() = default;
+	GetStorageCheckSumReply(const std::vector<CheckSumMetaData>& checkSums, CheckSumMethod checkSumMethod)
+	  : checkSums(checkSums), checkSumMethod(static_cast<uint8_t>(checkSumMethod)) {}
+
+	template <class Ar>
+	void serialize(Ar& ar) {
+		serializer(ar, checkSums, checkSumMethod);
+	}
+};
+
+struct GetStorageCheckSumRequest {
+	constexpr static FileIdentifier file_identifier = 3828144;
+	std::vector<std::pair<KeyRange, Optional<Version>>> ranges;
+	Optional<UID> actionId;
+	uint8_t checkSumMethod;
+	ReplyPromise<GetStorageCheckSumReply> reply;
+
+	GetStorageCheckSumRequest() = default;
+	GetStorageCheckSumRequest(const std::vector<std::pair<KeyRange, Optional<Version>>>& ranges,
+	                          Optional<UID> actionId,
+	                          CheckSumMethod checkSumMethod)
+	  : ranges(ranges), actionId(actionId), checkSumMethod(static_cast<uint8_t>(checkSumMethod)) {}
+
+	template <class Ar>
+	void serialize(Ar& ar) {
+		serializer(ar, ranges, actionId, checkSumMethod, reply);
+	}
+};
+
+struct BulkDumpRequest {
+	constexpr static FileIdentifier file_identifier = 3828145;
+	std::vector<UID> checksumServers;
+	BulkDumpState bulkDumpState;
+	ReplyPromise<BulkDumpState> reply;
+
+	BulkDumpRequest() = default;
+	BulkDumpRequest(const std::vector<UID>& checksumServers, const BulkDumpState& bulkDumpState)
+	  : checksumServers(checksumServers), bulkDumpState(bulkDumpState) {};
+
+	std::string toString() const {
+		return "[BulkDumpState]: " + bulkDumpState.toString() + ", [ChecksumServers]: " + describe(checksumServers);
+	}
+
+	template <class Ar>
+	void serialize(Ar& ar) {
+		serializer(ar, checksumServers, bulkDumpState, reply);
+	}
+};
+
 // Memory size for storing mutation in the mutation log and the versioned map.
 inline int mvccStorageBytes(int mutationBytes) {
 	// Why * 2:
@@ -1239,5 +1268,7 @@ inline int mvccStorageBytes(int mutationBytes) {
 	return VersionedMap<KeyRef, ValueOrClearToRef>::overheadPerItem * 2 +
 	       (mutationBytes + MutationRef::OVERHEAD_BYTES) * 2;
 }
+
+#include "fdbclient/StorageServerLoadBalance.h"
 
 #endif

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,13 +42,16 @@
 extern "C" {
 #endif
 
-/* Pointers to these opaque types represent objects in the FDB API */
+/*
+ * Pointers to these opaque types represent objects in the FDB API.
+ * Keep typedef syntax here because this is a public C header.
+ */
 typedef struct FDB_future FDBFuture;
 typedef struct FDBResult_ FDBResult;
 typedef struct FDB_cluster FDBCluster;
 typedef struct FDB_database FDBDatabase;
-typedef struct FDB_tenant FDBTenant;
 typedef struct FDB_transaction FDBTransaction;
+typedef struct FDB_cdc_consumer FDBCdcConsumer;
 
 typedef int fdb_error_t;
 typedef int fdb_bool_t;

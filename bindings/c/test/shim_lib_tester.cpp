@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -102,7 +102,8 @@ bool processIntOption(const std::string& optionName, const std::string& value, i
 		return false;
 	}
 	if (res < minValue || res > maxValue) {
-		fmt::print(stderr, "Value for {} must be between {} and {}", optionName, minValue, maxValue);
+		fmt::print(
+		    stderr, "Value for {} must be between {} and {}. Input value {}", optionName, minValue, maxValue, res);
 		return false;
 	}
 	return true;
@@ -205,13 +206,21 @@ void testBasicApi(const TesterOptions& options) {
 	}
 }
 
-void test710Api(const TesterOptions& options) {
-	fdb::Database db(options.clusterFile);
-	try {
-		db.openTenant(fdb::toBytesRef("not_existing_tenant"sv));
-	} catch (const fdb::Error& err) {
-		fdb_check(err, "Tenant not found expected", error_code_tenant_not_found);
-	}
+// NOTE: if we add a new API method that is not in old libraries,
+// then put in code to call that method here. In the higher level test
+// code that invokes this program, expect success when run against
+// the current library version and failure when running against an old
+// library that doesn't have the new API.
+//
+// There used to be an example of this paradigm that invoked
+// openTenant() and expected failure when running against 7.0.0.  This
+// no longer works because openTenant has been removed from current
+// code.  There also seems to be no relatively new API that we can
+// use for a test of this nature.  However, the future need for a test
+// of this nature can reasonably be anticipated, hence we retain
+// this comment and placeholder function.
+void testNewOnlyApi(const TesterOptions& options) {
+	// Implement when needed
 }
 
 } // namespace
@@ -235,13 +244,26 @@ int main(int argc, char** argv) {
 
 		std::thread network_thread{ [] { fdb_check(fdb::network::run(), "FDB network thread failed"); } };
 
-		// Try calling some basic functionality that is available
-		// in all recent API versions
 		testBasicApi(options);
 
-		// Try calling 710-specific API. This enables testing what
-		// happens if a library is missing a function
-		test710Api(options);
+		testNewOnlyApi(options);
+
+#ifdef ADDRESS_SANITIZER
+		// Flush the network thread's onMainThread queue to ensure deferred
+		// cleanup callbacks have been processed before stopping the network.
+		{
+			fdb::native::FDBDatabase* flushDb = nullptr;
+			auto err = fdb::native::fdb_create_database(options.clusterFile.c_str(), &flushDb);
+			if (!err && flushDb) {
+				auto f = fdb::native::fdb_database_get_server_protocol(flushDb, 0);
+				if (f) {
+					(void)fdb::native::fdb_future_block_until_ready(f);
+					fdb::native::fdb_future_destroy(f);
+				}
+				fdb::native::fdb_database_destroy(flushDb);
+			}
+		}
+#endif
 
 		fdb_check(fdb::network::stop(), "Stop network failed");
 		network_thread.join();

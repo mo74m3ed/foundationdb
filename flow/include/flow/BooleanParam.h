@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ public:
 	constexpr void set(bool value) { this->value = value; }
 };
 
-// Declares a boolean parametr with the desired name. This declaration can be nested inside of a namespace or another
+// Declares a boolean parameter with the desired name. This declaration can be nested inside of a namespace or another
 // class. This macro should not be used directly unless this boolean parameter is going to be defined as a nested class.
 #define FDB_DECLARE_BOOLEAN_PARAM(ParamName)                                                                           \
 	class ParamName : public BooleanParam {                                                                            \

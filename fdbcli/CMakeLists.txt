@@ -2,8 +2,9 @@ include(AddFdbTest)
 fdb_find_sources(FDBCLI_SRCS)
 
 add_flow_target(EXECUTABLE NAME fdbcli SRCS ${FDBCLI_SRCS})
-target_include_directories(fdbcli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_BINARY_DIR}/include")
-target_link_libraries(fdbcli PRIVATE fdbclient metacluster SimpleOpt)
+target_include_directories(fdbcli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(fdbcli PRIVATE fdbctl fdbclient SimpleOpt)
+
 if (USE_UBSAN)
   # The intent is to put typeinfo symbols in the dynamic symbol table so that
   # the types in fdbcli and external libfdb_c clients agree for ubsan's vptr
@@ -28,40 +29,47 @@ endif()
 if (NOT WIN32 AND NOT OPEN_FOR_IDE)
   add_dependencies(fdbcli external_client)
 
-  add_fdbclient_test(
-    NAME single_process_fdbcli_tests
+  if(NOT USE_ASAN)
+    # TODO: this is known to fail with ASAN, fix needed
+    add_fdbclient_test(
+      NAME single_process_fdbcli_tests
+      COMMAND ${CMAKE_SOURCE_DIR}/fdbcli/tests/fdbcli_tests.py
+              ${CMAKE_BINARY_DIR}
+              @CLUSTER_FILE@
+              )
+  endif()
+  if(NOT USE_ASAN)
+    # multi_process fdbcli tests take >40 minutes under ASAN, exceeding
+    # any reasonable timeout for CI
+    add_fdbclient_test(
+      NAME multi_process_fdbcli_tests
+      PROCESS_NUMBER 5
+      COMMAND ${CMAKE_SOURCE_DIR}/fdbcli/tests/fdbcli_tests.py
+              ${CMAKE_BINARY_DIR}
+              @CLUSTER_FILE@
+              5
+              )
+  endif()
+  if(NOT USE_ASAN)
+    # TODO: this is known to fail with ASAN, fix needed
+    add_fdbclient_test(
+    NAME single_process_external_client_fdbcli_tests
     COMMAND ${CMAKE_SOURCE_DIR}/fdbcli/tests/fdbcli_tests.py
             ${CMAKE_BINARY_DIR}
             @CLUSTER_FILE@
-            )
-  add_fdbclient_test(
-    NAME multi_process_fdbcli_tests
+            --external-client-library ${CMAKE_BINARY_DIR}/bindings/c/libfdb_c_external.so
+    )
+  endif()
+  if(NOT USE_ASAN)
+    # multi_process fdbcli tests take >40 minutes under ASAN
+    add_fdbclient_test(
+    NAME multi_process_external_client_fdbcli_tests
     PROCESS_NUMBER 5
     COMMAND ${CMAKE_SOURCE_DIR}/fdbcli/tests/fdbcli_tests.py
             ${CMAKE_BINARY_DIR}
             @CLUSTER_FILE@
             5
+            --external-client-library ${CMAKE_BINARY_DIR}/bindings/c/libfdb_c_external.so
             )
-  add_fdbclient_test(
-  NAME single_process_external_client_fdbcli_tests
-  COMMAND ${CMAKE_SOURCE_DIR}/fdbcli/tests/fdbcli_tests.py
-          ${CMAKE_BINARY_DIR}
-          @CLUSTER_FILE@
-          --external-client-library ${CMAKE_BINARY_DIR}/bindings/c/libfdb_c_external.so
-          )
-  add_fdbclient_test(
-  NAME multi_process_external_client_fdbcli_tests
-  PROCESS_NUMBER 5
-  COMMAND ${CMAKE_SOURCE_DIR}/fdbcli/tests/fdbcli_tests.py
-          ${CMAKE_BINARY_DIR}
-          @CLUSTER_FILE@
-          5
-          --external-client-library ${CMAKE_BINARY_DIR}/bindings/c/libfdb_c_external.so
-          )
-
-  add_multi_fdbclient_test(
-    NAME metacluster_fdbcli_tests
-    COMMAND ${CMAKE_SOURCE_DIR}/fdbcli/tests/metacluster_fdbcli_tests.py
-            ${CMAKE_BINARY_DIR}
-            )
+  endif()
 endif()

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,9 +24,6 @@
 #include "flow/FastRef.h"
 #include "flow/flow.h"
 
-#if defined(HAVE_WOLFSSL)
-#include <wolfssl/options.h>
-#endif
 #include <openssl/aes.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -35,6 +32,7 @@
 #include <vector>
 
 #define AES_256_KEY_LENGTH 32
+#define GCM_TAG_LEN 16
 
 // Wrapper class for openssl implementation of AES GCM
 // encryption/decryption
@@ -47,7 +45,7 @@ class StreamCipherKey : NonCopyable {
 	int keySize;
 
 public:
-	StreamCipherKey(int size);
+	explicit StreamCipherKey(int size);
 	~StreamCipherKey();
 
 	int size() const { return keySize; }
@@ -72,7 +70,7 @@ class StreamCipher final : NonCopyable {
 
 public:
 	StreamCipher();
-	StreamCipher(int KeySize);
+	explicit StreamCipher(int KeySize);
 	~StreamCipher();
 	EVP_CIPHER_CTX* getCtx();
 	HMAC_CTX* getHmacCtx();
@@ -96,7 +94,7 @@ class DecryptionStreamCipher final : NonCopyable, public ReferenceCounted<Decryp
 public:
 	DecryptionStreamCipher(const StreamCipherKey* key, const StreamCipher::IV& iv);
 	StringRef decrypt(unsigned char const* ciphertext, int len, Arena&);
-	StringRef finish(Arena&);
+	StringRef finish(const uint8_t* tag, Arena&);
 };
 
 class HmacSha256StreamCipher final : NonCopyable, public ReferenceCounted<HmacSha256StreamCipher> {

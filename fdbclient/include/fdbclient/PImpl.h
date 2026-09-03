@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ class PImpl {
 	std::unique_ptr<T> impl;
 	struct ConstructorTag {};
 	template <class... Args>
-	PImpl(ConstructorTag, Args&&... args) : impl(std::make_unique<T>(std::forward<Args>(args)...)) {}
+	explicit PImpl(ConstructorTag, Args&&... args) : impl(std::make_unique<T>(std::forward<Args>(args)...)) {}
 
 public:
 	PImpl() = default;

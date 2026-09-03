@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2023 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,11 +24,12 @@
 #include <array>
 #include <variant>
 
+#include "flow/ObjectSerializerTraits.h"
 #include "flow/Optional.h"
 
 struct IPAddress {
 	// It should be the same to boost::asio::ip::address_v6::bytes_type. This is enforced by static_assert in
-	// Platform.actor.cpp.
+	// Platform.cpp.
 	using IPAddressStore = std::array<uint8_t, 16>;
 
 public:

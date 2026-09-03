@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2023 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -83,7 +83,9 @@ struct Traceable : std::false_type {};
 #define FORMAT_TRACEABLE(type, fmt)                                                                                    \
 	template <>                                                                                                        \
 	struct Traceable<type> : std::true_type {                                                                          \
-		static std::string toString(type value) { return format(fmt, value); }                                         \
+		static std::string toString(type value) {                                                                      \
+			return format(fmt, value);                                                                                 \
+		}                                                                                                              \
 	}
 
 FORMAT_TRACEABLE(bool, "%d");
@@ -107,7 +109,8 @@ FORMAT_TRACEABLE(volatile unsigned long long, "%llu");
 FORMAT_TRACEABLE(volatile double, "%g");
 
 template <class Enum>
-struct Traceable<Enum, std::enable_if_t<std::is_enum_v<Enum>>> : std::true_type {
+    requires(std::is_enum_v<Enum>)
+struct Traceable<Enum> : std::true_type {
 	static std::string toString(Enum e) { return format("%lld", (int64_t)e); }
 };
 
@@ -248,15 +251,15 @@ struct Traceable<std::atomic<T>> : std::true_type {
 };
 
 template <class BooleanParamSub>
-struct Traceable<BooleanParamSub, std::enable_if_t<std::is_base_of_v<BooleanParam, BooleanParamSub>>> : std::true_type {
+    requires(std::is_base_of_v<BooleanParam, BooleanParamSub>)
+struct Traceable<BooleanParamSub> : std::true_type {
 	static std::string toString(BooleanParamSub const& value) { return Traceable<bool>::toString(value); }
 };
 
 // Adapter to redirect fmt::formatter calls to Traceable for a supported type
 template <typename T>
 struct FormatUsingTraceable : fmt::formatter<std::string> {
-	template <typename FormatContext>
-	auto format(const T& val, FormatContext& ctx) {
+	auto format(const T& val, fmt::format_context& ctx) const {
 		return fmt::formatter<std::string>::format(Traceable<T>::toString(val), ctx);
 	}
 };

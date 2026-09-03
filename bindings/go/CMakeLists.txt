@@ -8,19 +8,21 @@ set(SRCS
   src/fdb/directory/directory.go
   src/fdb/doc.go
   src/fdb/transaction.go
-  src/fdb/directory/directoryLayer.go
+  src/fdb/directory/directory_layer.go
   src/fdb/errors.go
+  src/fdb/errors_test.go
   src/fdb/keyselector.go
   src/fdb/tuple/tuple.go
   src/fdb/cluster.go
-  src/fdb/directory/directoryPartition.go
+  src/fdb/directory/directory_partition.go
   src/fdb/fdb.go
   src/fdb/range.go
   src/fdb/tuple/tuple_test.go
   src/fdb/database.go
-  src/fdb/directory/directorySubspace.go
+  src/fdb/directory/directory_subspace.go
   src/fdb/fdb_test.go
-  src/fdb/snapshot.go)
+  src/fdb/snapshot.go
+  go.mod)
 
 set(GOPATH ${CMAKE_CURRENT_BINARY_DIR})
 set(GO_PACKAGE_ROOT github.com/apple/foundationdb/bindings/go)
@@ -40,9 +42,10 @@ set(GO_PACKAGE_OUTDIR ${GOPATH}/pkg/${GOPLATFORM}/${GO_IMPORT_PATH})
 file(MAKE_DIRECTORY ${GOPATH}
                     ${GO_DEST})
 set(go_options_file ${GO_DEST}/src/fdb/generated.go)
+set(go_error_file ${GO_DEST}/src/fdb/error_codes_generated.go)
 
 set(go_env GOPATH=${GOPATH}
-  C_INCLUDE_PATH=${CMAKE_BINARY_DIR}/bindings/c/foundationdb:${CMAKE_SOURCE_DIR}/bindings/c
+  CGO_CFLAGS="-I${CMAKE_BINARY_DIR}/bindings/c/foundationdb;-I${CMAKE_SOURCE_DIR}/bindings/c"
   CGO_LDFLAGS=-L${CMAKE_BINARY_DIR}/lib
   GO111MODULE=auto)
 
@@ -59,14 +62,23 @@ foreach(src_file IN LISTS SRCS)
 endforeach()
 add_custom_target(copy_go_sources DEPENDS ${SRCS_OUT})
 add_custom_command(OUTPUT ${go_options_file}
-  COMMAND ${GO_EXECUTABLE} run ${CMAKE_CURRENT_SOURCE_DIR}/src/_util/translate_fdb_options.go
+  COMMAND ${GO_EXECUTABLE} run ${CMAKE_CURRENT_SOURCE_DIR}/src/internal/translate_fdb_options.go
           -in ${CMAKE_SOURCE_DIR}/fdbclient/vexillographer/fdb.options
           -out ${go_options_file}
-  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/_util/translate_fdb_options.go
+  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/internal/translate_fdb_options.go
           ${CMAKE_SOURCE_DIR}/fdbclient/vexillographer/fdb.options
   COMMENT "Generate FDBOptions for GO")
 add_custom_target(go_options_file DEPENDS ${go_options_file})
 add_dependencies(go_options_file copy_go_sources)
+add_custom_command(OUTPUT ${go_error_file}
+  COMMAND ${GO_EXECUTABLE} run ${CMAKE_CURRENT_SOURCE_DIR}/src/internal/gen_errors/main.go
+          -in ${CMAKE_SOURCE_DIR}/flow/include/flow/error_definitions.h
+          -out ${go_error_file}
+  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/internal/gen_errors/main.go
+          ${CMAKE_SOURCE_DIR}/flow/include/flow/error_definitions.h
+  COMMENT "Generate FDB errors for GO")
+add_custom_target(go_error_file DEPENDS ${go_error_file})
+add_dependencies(go_error_file copy_go_sources)
 
 function(build_go_package)
   set(options LIBRARY EXECUTABLE INCLUDE_TEST)
@@ -100,8 +112,6 @@ function(build_go_package)
   endif()
   add_custom_command(OUTPUT ${outfile}
     COMMAND ${CMAKE_COMMAND} -E env ${go_env}
-            ${GO_EXECUTABLE} get -d ${GO_IMPORT_PATH}/${BGP_PATH} &&
-            ${CMAKE_COMMAND} -E env ${go_env}
             ${GO_EXECUTABLE} install ${GO_IMPORT_PATH}/${BGP_PATH}
     DEPENDS ${fdb_options_file}
     COMMENT "Building ${BGP_NAME}")
@@ -127,7 +137,7 @@ function(build_go_package)
 endfunction()
 
 build_go_package(LIBRARY NAME fdb_go PATH fdb INCLUDE_TEST)
-add_dependencies(fdb_go fdb_c go_options_file)
+add_dependencies(fdb_go fdb_c go_options_file go_error_file)
 
 build_go_package(LIBRARY NAME tuple_go PATH fdb/tuple INCLUDE_TEST)
 add_dependencies(tuple_go fdb_go)
@@ -148,3 +158,23 @@ add_test(
   NAME update_bindings_go_src_fdb_generated_go
   COMMAND ${CMAKE_COMMAND} -E compare_files ${go_options_file} ${CMAKE_CURRENT_SOURCE_DIR}/src/fdb/generated.go
 )
+
+# If this fails, then you need to update bindings/go/src/fdb/error_codes_generated.go
+# Ideally this wouldn't be necessary, but it looks like we distribute the go
+# bindings directly from the source on github.
+add_test(
+  NAME update_generated_errors
+  COMMAND ${CMAKE_COMMAND} -E compare_files ${go_error_file} ${CMAKE_CURRENT_SOURCE_DIR}/src/fdb/error_codes_generated.go
+)
+
+# gofmt should be installed with go, but it's better to check if the binary is available.
+find_program(GOFMT_EXECUTABLE gofmt HINTS /usr/local/go/bin/)
+if(GOFMT_EXECUTABLE)
+  add_test(
+    NAME fdb-go-fmt
+    # gofmt -d doesn't return a non-zero exit code, so we have to check if the output is empty.
+    COMMAND bash -c "out=$(\"${GOFMT_EXECUTABLE}\" -d \"${CMAKE_CURRENT_SOURCE_DIR}\"); test -z \"$out\" || { echo \"$out\"; exit 1; }"
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+else()
+  message(WARNING "gofmt not found. The 'fdb-go-fmt' test will not be available.")
+endif()

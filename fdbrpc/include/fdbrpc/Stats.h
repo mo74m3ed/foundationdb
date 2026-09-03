@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@
 #include "flow/serialize.h"
 #include <string>
 #include <type_traits>
+#include "flow/swift_support.h"
 #pragma once
 
 // Yet another performance statistics interface
@@ -43,7 +44,7 @@ MyCounters() : foo("foo", cc), bar("bar", cc), baz("baz", cc) {}
 #include <cstdint>
 #include <cstddef>
 #include "flow/flow.h"
-#include "flow/TDMetric.actor.h"
+#include "flow/TDMetric.h"
 #include "fdbrpc/DDSketch.h"
 
 struct ICounter : public IMetric {
@@ -85,7 +86,7 @@ class CounterCollection {
 	double logTime;
 
 public:
-	CounterCollection(std::string const& name, std::string const& id = std::string())
+	explicit CounterCollection(std::string const& name, std::string const& id = std::string())
 	  : name(name), id(id), logTime(0) {}
 	~CounterCollection() {
 		for (auto c : countersToRemove)
@@ -113,7 +114,7 @@ public:
 
 struct Counter final : public ICounter, NonCopyable {
 public:
-	typedef int64_t Value;
+	using Value = int64_t;
 
 	Counter(std::string const& name, CounterCollection& collection, bool skipTraceOnSilentInterval = false);
 
@@ -162,6 +163,26 @@ struct Traceable<Counter> : std::true_type {
 	}
 };
 
+// Increments one counter at construction, and another at destruction;
+// intended to be used to mark the beginning and end of some scope, without
+// the possibility of forgetting to increment the exit counter on exceptions.
+class CountedSection final : public NonCopyable {
+public:
+	CountedSection() : end(nullptr) {}
+	CountedSection(Counter& start, Counter& end) : end(&end) { ++start; }
+	CountedSection& operator=(CountedSection&& other) {
+		std::swap(end, other.end);
+		return *this;
+	}
+	~CountedSection() {
+		if (end)
+			++*end;
+	}
+
+private:
+	Counter* end;
+};
+
 template <class F>
 struct SpecialCounter final : ICounter, FastAllocated<SpecialCounter<F>>, NonCopyable {
 	SpecialCounter(CounterCollection& collection, std::string const& name, F&& f) : name(name), f(f) {
@@ -193,7 +214,7 @@ struct SpecialCounter final : ICounter, FastAllocated<SpecialCounter<F>>, NonCop
 };
 template <class F>
 static void specialCounter(CounterCollection& collection, std::string const& name, F&& f) {
-	new SpecialCounter<F>(collection, name, std::move(f));
+	new SpecialCounter<F>(collection, name, std::forward<F>(f));
 }
 
 FDB_BOOLEAN_PARAM(Filtered);

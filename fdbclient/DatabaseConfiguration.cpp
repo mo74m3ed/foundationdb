@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,13 +18,14 @@
  * limitations under the License.
  */
 
+#include <cstdio>
 #include "fdbclient/DatabaseConfiguration.h"
 #include "fdbclient/FDBTypes.h"
 #include "fdbclient/SystemData.h"
 #include "flow/ITrace.h"
 #include "flow/Platform.h"
 #include "flow/Trace.h"
-#include "flow/genericactors.actor.h"
+#include "flow/genericactors.h"
 #include "flow/UnitTest.h"
 
 DatabaseConfiguration::DatabaseConfiguration() {
@@ -35,9 +36,10 @@ void DatabaseConfiguration::resetInternal() {
 	// does NOT reset rawConfiguration
 	initialized = false;
 	commitProxyCount = grvProxyCount = resolverCount = desiredTLogCount = tLogWriteAntiQuorum = tLogReplicationFactor =
-	    storageTeamSize = desiredLogRouterCount = -1;
+	    storageTeamSize = desiredLogRouterCount = desiredRangePartitionedBackupWorkerCount = -1;
 	tLogVersion = TLogVersion::DEFAULT;
 	tLogDataStoreType = storageServerStoreType = testingStorageServerStoreType = KeyValueStoreType::END;
+	perpetualStoreType = KeyValueStoreType::NONE;
 	desiredTSSCount = 0;
 	tLogSpillType = TLogSpillType::DEFAULT;
 	autoCommitProxyCount = CLIENT_KNOBS->DEFAULT_AUTO_COMMIT_PROXIES;
@@ -50,12 +52,10 @@ void DatabaseConfiguration::resetInternal() {
 	remoteDesiredTLogCount = -1;
 	remoteTLogReplicationFactor = repopulateRegionAntiQuorum = 0;
 	backupWorkerEnabled = false;
+	rangePartitionedBackupWorkerEnabled = false;
 	perpetualStorageWiggleSpeed = 0;
 	perpetualStorageWiggleLocality = "0";
 	storageMigrationType = StorageMigrationType::DEFAULT;
-	blobGranulesEnabled = false;
-	tenantMode = TenantMode::DISABLED;
-	encryptionAtRestMode = EncryptionAtRestMode::DISABLED;
 }
 
 int toInt(ValueRef const& v) {
@@ -84,7 +84,7 @@ void parseReplicationPolicy(Reference<IReplicationPolicy>* policy, ValueRef cons
 
 void parse(std::vector<RegionInfo>* regions, ValueRef const& v) {
 	try {
-		StatusObject statusObj = BinaryReader::fromStringRef<StatusObject>(v, IncludeVersion());
+		auto statusObj = BinaryReader::fromStringRef<StatusObject>(v, IncludeVersion());
 		regions->clear();
 		if (statusObj["regions"].type() != json_spirit::array_type) {
 			return;
@@ -123,47 +123,39 @@ void parse(std::vector<RegionInfo>* regions, ValueRef const& v) {
 					info.satelliteTLogReplicationFactor = 1;
 					info.satelliteTLogUsableDcs = 1;
 					info.satelliteTLogWriteAntiQuorum = 0;
-					info.satelliteTLogPolicy = Reference<IReplicationPolicy>(new PolicyOne());
+					info.satelliteTLogPolicy = makeReference<PolicyOne>();
 				} else if (satelliteReplication == "one_satellite_double") {
 					info.satelliteTLogReplicationFactor = 2;
 					info.satelliteTLogUsableDcs = 1;
 					info.satelliteTLogWriteAntiQuorum = 0;
-					info.satelliteTLogPolicy = Reference<IReplicationPolicy>(
-					    new PolicyAcross(2, "zoneid", Reference<IReplicationPolicy>(new PolicyOne())));
+					info.satelliteTLogPolicy = makeReference<PolicyAcross>(2, "zoneid", makeReference<PolicyOne>());
 				} else if (satelliteReplication == "one_satellite_triple") {
 					info.satelliteTLogReplicationFactor = 3;
 					info.satelliteTLogUsableDcs = 1;
 					info.satelliteTLogWriteAntiQuorum = 0;
-					info.satelliteTLogPolicy = Reference<IReplicationPolicy>(
-					    new PolicyAcross(3, "zoneid", Reference<IReplicationPolicy>(new PolicyOne())));
+					info.satelliteTLogPolicy = makeReference<PolicyAcross>(3, "zoneid", makeReference<PolicyOne>());
 				} else if (satelliteReplication == "two_satellite_safe") {
 					info.satelliteTLogReplicationFactor = 4;
 					info.satelliteTLogUsableDcs = 2;
 					info.satelliteTLogWriteAntiQuorum = 0;
-					info.satelliteTLogPolicy = Reference<IReplicationPolicy>(
-					    new PolicyAcross(2,
-					                     "dcid",
-					                     Reference<IReplicationPolicy>(new PolicyAcross(
-					                         2, "zoneid", Reference<IReplicationPolicy>(new PolicyOne())))));
+					info.satelliteTLogPolicy = makeReference<PolicyAcross>(
+					    2, "dcid", makeReference<PolicyAcross>(2, "zoneid", makeReference<PolicyOne>()));
 					info.satelliteTLogReplicationFactorFallback = 2;
 					info.satelliteTLogUsableDcsFallback = 1;
 					info.satelliteTLogWriteAntiQuorumFallback = 0;
-					info.satelliteTLogPolicyFallback = Reference<IReplicationPolicy>(
-					    new PolicyAcross(2, "zoneid", Reference<IReplicationPolicy>(new PolicyOne())));
+					info.satelliteTLogPolicyFallback =
+					    makeReference<PolicyAcross>(2, "zoneid", makeReference<PolicyOne>());
 				} else if (satelliteReplication == "two_satellite_fast") {
 					info.satelliteTLogReplicationFactor = 4;
 					info.satelliteTLogUsableDcs = 2;
 					info.satelliteTLogWriteAntiQuorum = 2;
-					info.satelliteTLogPolicy = Reference<IReplicationPolicy>(
-					    new PolicyAcross(2,
-					                     "dcid",
-					                     Reference<IReplicationPolicy>(new PolicyAcross(
-					                         2, "zoneid", Reference<IReplicationPolicy>(new PolicyOne())))));
+					info.satelliteTLogPolicy = makeReference<PolicyAcross>(
+					    2, "dcid", makeReference<PolicyAcross>(2, "zoneid", makeReference<PolicyOne>()));
 					info.satelliteTLogReplicationFactorFallback = 2;
 					info.satelliteTLogUsableDcsFallback = 1;
 					info.satelliteTLogWriteAntiQuorumFallback = 0;
-					info.satelliteTLogPolicyFallback = Reference<IReplicationPolicy>(
-					    new PolicyAcross(2, "zoneid", Reference<IReplicationPolicy>(new PolicyOne())));
+					info.satelliteTLogPolicyFallback =
+					    makeReference<PolicyAcross>(2, "zoneid", makeReference<PolicyOne>());
 				} else {
 					throw invalid_option();
 				}
@@ -185,57 +177,104 @@ void parse(std::vector<RegionInfo>* regions, ValueRef const& v) {
 
 void DatabaseConfiguration::setDefaultReplicationPolicy() {
 	if (!storagePolicy) {
-		storagePolicy = Reference<IReplicationPolicy>(
-		    new PolicyAcross(storageTeamSize, "zoneid", Reference<IReplicationPolicy>(new PolicyOne())));
+		storagePolicy = makeReference<PolicyAcross>(storageTeamSize, "zoneid", makeReference<PolicyOne>());
 	}
 	if (!tLogPolicy) {
-		tLogPolicy = Reference<IReplicationPolicy>(
-		    new PolicyAcross(tLogReplicationFactor, "zoneid", Reference<IReplicationPolicy>(new PolicyOne())));
+		tLogPolicy = makeReference<PolicyAcross>(tLogReplicationFactor, "zoneid", makeReference<PolicyOne>());
 	}
 	if (remoteTLogReplicationFactor > 0 && !remoteTLogPolicy) {
-		remoteTLogPolicy = Reference<IReplicationPolicy>(
-		    new PolicyAcross(remoteTLogReplicationFactor, "zoneid", Reference<IReplicationPolicy>(new PolicyOne())));
+		remoteTLogPolicy =
+		    makeReference<PolicyAcross>(remoteTLogReplicationFactor, "zoneid", makeReference<PolicyOne>());
 	}
 	for (auto& r : regions) {
 		if (r.satelliteTLogReplicationFactor > 0 && !r.satelliteTLogPolicy) {
-			r.satelliteTLogPolicy = Reference<IReplicationPolicy>(new PolicyAcross(
-			    r.satelliteTLogReplicationFactor, "zoneid", Reference<IReplicationPolicy>(new PolicyOne())));
+			r.satelliteTLogPolicy =
+			    makeReference<PolicyAcross>(r.satelliteTLogReplicationFactor, "zoneid", makeReference<PolicyOne>());
 		}
 		if (r.satelliteTLogReplicationFactorFallback > 0 && !r.satelliteTLogPolicyFallback) {
-			r.satelliteTLogPolicyFallback = Reference<IReplicationPolicy>(new PolicyAcross(
-			    r.satelliteTLogReplicationFactorFallback, "zoneid", Reference<IReplicationPolicy>(new PolicyOne())));
+			r.satelliteTLogPolicyFallback = makeReference<PolicyAcross>(
+			    r.satelliteTLogReplicationFactorFallback, "zoneid", makeReference<PolicyOne>());
 		}
 	}
 }
 
+int32_t DatabaseConfiguration::maxZoneFailuresTolerated(int fullyReplicatedRegions, bool forAvailability) const {
+	int worstSatelliteTLogReplicationFactor = !regions.empty() ? std::numeric_limits<int>::max() : 0;
+	int regionsWithNonNegativePriority = 0;
+	for (auto& r : regions) {
+		if (r.priority >= 0) {
+			regionsWithNonNegativePriority++;
+		}
+		worstSatelliteTLogReplicationFactor = std::min(
+		    worstSatelliteTLogReplicationFactor, r.satelliteTLogReplicationFactor - r.satelliteTLogWriteAntiQuorum);
+		if (r.satelliteTLogUsableDcsFallback > 0) {
+			worstSatelliteTLogReplicationFactor =
+			    std::min(worstSatelliteTLogReplicationFactor,
+			             r.satelliteTLogReplicationFactorFallback - r.satelliteTLogWriteAntiQuorumFallback);
+		}
+	}
+
+	if (worstSatelliteTLogReplicationFactor <= 0) {
+		// HA is not enabled in this database. Return single cluster zone failures to tolerate.
+		return std::min(tLogReplicationFactor - 1 - tLogWriteAntiQuorum, storageTeamSize - 1);
+	}
+
+	// Compute HA enabled database zone failure tolerance.
+	auto isGeoReplicatedData = [this, &fullyReplicatedRegions]() {
+		return usableRegions > 1 && fullyReplicatedRegions > 1;
+	};
+
+	if (isGeoReplicatedData() && (!forAvailability || regionsWithNonNegativePriority > 1)) {
+		return 1 + std::min(std::max(tLogReplicationFactor - 1 - tLogWriteAntiQuorum,
+		                             worstSatelliteTLogReplicationFactor - 1),
+		                    storageTeamSize - 1);
+	}
+	// Primary and Satellite tLogs are synchronously replicated, hence we can lose all but 1.
+	return std::min(tLogReplicationFactor + worstSatelliteTLogReplicationFactor - 1 - tLogWriteAntiQuorum,
+	                storageTeamSize - 1);
+}
+
 bool DatabaseConfiguration::isValid() const {
-	if (!(initialized && tLogWriteAntiQuorum >= 0 && tLogWriteAntiQuorum <= tLogReplicationFactor / 2 &&
-	      tLogReplicationFactor >= 1 && storageTeamSize >= 1 && getDesiredCommitProxies() >= 1 &&
-	      getDesiredGrvProxies() >= 1 && getDesiredLogs() >= 1 && getDesiredResolvers() >= 1 &&
-	      tLogVersion != TLogVersion::UNSET && tLogVersion >= TLogVersion::MIN_RECRUITABLE &&
-	      tLogVersion <= TLogVersion::MAX_SUPPORTED && tLogDataStoreType != KeyValueStoreType::END &&
-	      tLogSpillType != TLogSpillType::UNSET &&
-	      !(tLogSpillType == TLogSpillType::REFERENCE && tLogVersion < TLogVersion::V3) &&
-	      storageServerStoreType != KeyValueStoreType::END && autoCommitProxyCount >= 1 && autoGrvProxyCount >= 1 &&
-	      autoResolverCount >= 1 && autoDesiredTLogCount >= 1 && storagePolicy && tLogPolicy &&
-	      getDesiredRemoteLogs() >= 1 && remoteTLogReplicationFactor >= 0 && repopulateRegionAntiQuorum >= 0 &&
-	      repopulateRegionAntiQuorum <= 1 && usableRegions >= 1 && usableRegions <= 2 && regions.size() <= 2 &&
-	      (usableRegions == 1 || regions.size() == 2) && (regions.size() == 0 || regions[0].priority >= 0) &&
-	      (regions.size() == 0 || tLogPolicy->info() != "dcid^2 x zoneid^2 x 1") &&
+	// enable this via `fdbcli --knob_cli_print_invalid_configuration=1` command line parameter
+	auto log_test = [](const char* text, bool val) {
+		if (!val && CLIENT_KNOBS->CLI_PRINT_INVALID_CONFIGURATION) {
+			fprintf(stderr, "%s: false\n", text);
+		}
+		return val;
+	};
+// LOG_TEST(expr) takes an expression that returns a boolean.  If the boolean == false, the
+// expression and it's boolean return value will be printed.
+#define LOG_TEST(expr) log_test(#expr, (expr))
+	if (!(LOG_TEST(initialized) && LOG_TEST(tLogWriteAntiQuorum >= 0) &&
+	      LOG_TEST(tLogWriteAntiQuorum <= tLogReplicationFactor / 2) && LOG_TEST(tLogReplicationFactor >= 1) &&
+	      LOG_TEST(storageTeamSize >= 1) && LOG_TEST(getDesiredCommitProxies() >= 1) &&
+	      LOG_TEST(getDesiredGrvProxies() >= 1) && LOG_TEST(getDesiredLogs() >= 1) &&
+	      LOG_TEST(getDesiredResolvers() >= 1) && LOG_TEST(tLogVersion != TLogVersion::UNSET) &&
+	      LOG_TEST(tLogVersion >= TLogVersion::MIN_RECRUITABLE) &&
+	      LOG_TEST(tLogVersion <= TLogVersion::MAX_SUPPORTED) &&
+	      LOG_TEST(tLogDataStoreType != KeyValueStoreType::END) && LOG_TEST(tLogSpillType != TLogSpillType::UNSET) &&
+	      LOG_TEST(!(tLogSpillType == TLogSpillType::REFERENCE && tLogVersion < TLogVersion::V3)) &&
+	      LOG_TEST(storageServerStoreType != KeyValueStoreType::END) && LOG_TEST(autoCommitProxyCount >= 1) &&
+	      LOG_TEST(autoGrvProxyCount >= 1) && LOG_TEST(autoResolverCount >= 1) && LOG_TEST(autoDesiredTLogCount >= 1) &&
+	      LOG_TEST(!!storagePolicy) && LOG_TEST(!!tLogPolicy) && LOG_TEST(getDesiredRemoteLogs() >= 1) &&
+	      LOG_TEST(remoteTLogReplicationFactor >= 0) && LOG_TEST(repopulateRegionAntiQuorum >= 0) &&
+	      LOG_TEST(repopulateRegionAntiQuorum <= 1) && LOG_TEST(usableRegions >= 1) && LOG_TEST(usableRegions <= 2) &&
+	      LOG_TEST(regions.size() <= 2) && LOG_TEST((usableRegions == 1 || regions.size() == 2)) &&
+	      LOG_TEST((regions.empty() || regions[0].priority >= 0)) &&
+	      LOG_TEST((regions.empty() || tLogPolicy->info() != "dcid^2 x zoneid^2 x 1")) &&
 	      // We cannot specify regions with three_datacenter replication
-	      (perpetualStorageWiggleSpeed == 0 || perpetualStorageWiggleSpeed == 1) &&
-	      isValidPerpetualStorageWiggleLocality(perpetualStorageWiggleLocality) &&
-	      storageMigrationType != StorageMigrationType::UNSET && tenantMode >= TenantMode::DISABLED &&
-	      tenantMode < TenantMode::END && encryptionAtRestMode >= EncryptionAtRestMode::DISABLED &&
-	      encryptionAtRestMode < EncryptionAtRestMode::END)) {
+	      LOG_TEST((perpetualStorageWiggleSpeed == 0 || perpetualStorageWiggleSpeed == 1)) &&
+	      LOG_TEST(isValidPerpetualStorageWiggleLocality(perpetualStorageWiggleLocality)) &&
+	      LOG_TEST(storageMigrationType != StorageMigrationType::UNSET))) {
 		return false;
 	}
+#undef LOG_TEST
 	std::set<Key> dcIds;
 	dcIds.insert(Key());
 	for (auto& r : regions) {
-		if (!(!dcIds.count(r.dcId) && r.satelliteTLogReplicationFactor >= 0 && r.satelliteTLogWriteAntiQuorum >= 0 &&
+		if (!(!dcIds.contains(r.dcId) && r.satelliteTLogReplicationFactor >= 0 && r.satelliteTLogWriteAntiQuorum >= 0 &&
 		      r.satelliteTLogUsableDcs >= 1 &&
-		      (r.satelliteTLogReplicationFactor == 0 || (r.satelliteTLogPolicy && r.satellites.size())) &&
+		      (r.satelliteTLogReplicationFactor == 0 || (r.satelliteTLogPolicy && !r.satellites.empty())) &&
 		      (r.satelliteTLogUsableDcsFallback == 0 ||
 		       (r.satelliteTLogReplicationFactor > 0 && r.satelliteTLogReplicationFactorFallback > 0)))) {
 			return false;
@@ -245,7 +284,7 @@ bool DatabaseConfiguration::isValid() const {
 		satelliteDcIds.insert(Key());
 		satelliteDcIds.insert(r.dcId);
 		for (auto& s : r.satellites) {
-			if (satelliteDcIds.count(s.dcId)) {
+			if (satelliteDcIds.contains(s.dcId)) {
 				return false;
 			}
 			satelliteDcIds.insert(s.dcId);
@@ -331,7 +370,7 @@ StatusObject DatabaseConfiguration::toJSON(bool noPolicies) const {
 	}
 	result["usable_regions"] = usableRegions;
 
-	if (regions.size()) {
+	if (!regions.empty()) {
 		result["regions"] = getRegionJSON();
 	}
 
@@ -373,12 +412,75 @@ StatusObject DatabaseConfiguration::toJSON(bool noPolicies) const {
 	}
 
 	result["backup_worker_enabled"] = (int32_t)backupWorkerEnabled;
+	result["range_partitioned_backup_worker_enabled"] = (int32_t)rangePartitionedBackupWorkerEnabled;
+	if (desiredRangePartitionedBackupWorkerCount != -1 || isOverridden("range_partitioned_backup_workers")) {
+		result["range_partitioned_backup_workers"] = desiredRangePartitionedBackupWorkerCount;
+	}
 	result["perpetual_storage_wiggle"] = perpetualStorageWiggleSpeed;
 	result["perpetual_storage_wiggle_locality"] = perpetualStorageWiggleLocality;
+	if (perpetualStoreType.storeType() != KeyValueStoreType::END) {
+		result["perpetual_storage_wiggle_engine"] = perpetualStoreType.toString();
+	}
 	result["storage_migration_type"] = storageMigrationType.toString();
-	result["blob_granules_enabled"] = (int32_t)blobGranulesEnabled;
-	result["tenant_mode"] = tenantMode.toString();
-	result["encryption_at_rest_mode"] = encryptionAtRestMode.toString();
+	return result;
+}
+
+std::string DatabaseConfiguration::configureStringFromJSON(const StatusObject& json) {
+	std::string result;
+
+	for (auto kv : json) {
+		// These JSON properties are ignored for some reason.  This behavior is being maintained in a refactor
+		// of this code and the old code gave no reasoning.
+		static std::set<std::string> ignore = { "tss_storage_engine", "perpetual_storage_wiggle_locality" };
+		if (ignore.contains(kv.first)) {
+			continue;
+		}
+
+		result += " ";
+		// All integers are assumed to be actual DatabaseConfig keys and are set with
+		// the hidden "<name>:=<intValue>" syntax of the configure command.
+		if (kv.second.type() == json_spirit::int_type) {
+			result += kv.first + ":=" + format("%d", kv.second.get_int());
+		} else if (kv.second.type() == json_spirit::str_type) {
+			// For string values, some properties can set with a "<name>=<value>" syntax in "configure"
+			// Such properties are listed here:
+			static std::set<std::string> directSet = {
+				"storage_migration_type", "storage_engine", "log_engine", "perpetual_storage_wiggle_engine"
+			};
+
+			if (directSet.contains(kv.first)) {
+				result += kv.first + "=" + kv.second.get_str();
+			} else {
+				// For the rest, it is assumed that the property name is meaningless and the value string
+				// is a standalone 'configure' command which has the identical effect.
+				// TODO:  Fix this terrible legacy behavior which probably isn't compatible with
+				// some of the more recently added configuration and options.
+				result += kv.second.get_str();
+			}
+		} else if (kv.second.type() == json_spirit::array_type) {
+			// Array properties convert to <name>=<json_array>
+			result += kv.first + "=" +
+			          json_spirit::write_string(json_spirit::mValue(kv.second.get_array()),
+			                                    json_spirit::Output_options::none);
+		} else {
+			throw invalid_option_value();
+		}
+	}
+
+	// The log_engine setting requires some special handling because it was not included in the JSON form of a
+	// DatabaseConfiguration until FDB 7.3.  This means that configuring a new database using a JSON config object from
+	// an older version will now fail because it lacks an explicit log_engine setting.  Previously, the log_engine would
+	// be set indirectly because the "storage_engine=<engine_name>" property from JSON would convert to a standalone
+	// "<engine_name>" command in the output, and each engine name exists as a command which sets both the
+	// log and storage engines, with the log engine normally being ssd-2.
+	// The storage_engine and log_engine JSON properties now explicitly indicate their engine types and map to configure
+	// commands of the same name.  So, to support configuring a new database with an older JSON config without an
+	// explicit log_engine we simply add " log_engine=ssd-2" to the output string if the input JSON did not contain a
+	// log_engine.
+	if (!json.contains("log_engine")) {
+		result += " log_engine=ssd-2";
+	}
+
 	return result;
 }
 
@@ -485,7 +587,7 @@ StatusArray DatabaseConfiguration::getRegionJSON() const {
 			regionObj["satellite_logs"] = r.satelliteDesiredTLogCount;
 		}
 
-		if (r.satellites.size()) {
+		if (!r.satellites.empty()) {
 			for (auto& s : r.satellites) {
 				StatusObject satObj;
 				satObj["id"] = s.dcId.toString();
@@ -643,6 +745,11 @@ bool DatabaseConfiguration::setInternal(KeyRef key, ValueRef value) {
 	} else if (ck == "backup_worker_enabled"_sr) {
 		parse((&type), value);
 		backupWorkerEnabled = (type != 0);
+	} else if (ck == "range_partitioned_backup_worker_enabled"_sr) {
+		parse((&type), value);
+		rangePartitionedBackupWorkerEnabled = (type != 0);
+	} else if (ck == "range_partitioned_backup_workers"_sr) {
+		parse(&desiredRangePartitionedBackupWorkerCount, value);
 	} else if (ck == "usable_regions"_sr) {
 		parse(&usableRegions, value);
 	} else if (ck == "repopulate_anti_quorum"_sr) {
@@ -656,18 +763,14 @@ bool DatabaseConfiguration::setInternal(KeyRef key, ValueRef value) {
 			return false;
 		}
 		perpetualStorageWiggleLocality = value.toString();
+	} else if (ck == "perpetual_storage_wiggle_engine"_sr) {
+		parse((&type), value);
+		perpetualStoreType = (KeyValueStoreType::StoreType)type;
 	} else if (ck == "storage_migration_type"_sr) {
 		parse((&type), value);
 		storageMigrationType = (StorageMigrationType::MigrationType)type;
-	} else if (ck == "tenant_mode"_sr) {
-		tenantMode = TenantMode::fromValue(value);
 	} else if (ck == "proxies"_sr) {
 		overwriteProxiesCount();
-	} else if (ck == "blob_granules_enabled"_sr) {
-		parse((&type), value);
-		blobGranulesEnabled = (type != 0);
-	} else if (ck == "encryption_at_rest_mode"_sr) {
-		encryptionAtRestMode = EncryptionAtRestMode::fromValueRef(Optional<ValueRef>(value));
 	} else if (ck.startsWith("excluded/"_sr)) {
 		// excluded servers: don't keep the state internally
 	} else {
@@ -775,20 +878,6 @@ bool DatabaseConfiguration::isExcludedLocality(const LocalityData& locality) con
 		        .present()) {
 			return true;
 		}
-	}
-
-	return false;
-}
-
-// checks if this machineid of given locality is excluded.
-bool DatabaseConfiguration::isMachineExcluded(const LocalityData& locality) const {
-	if (locality.machineId().present()) {
-		return get(encodeExcludedLocalityKey(LocalityData::ExcludeLocalityKeyMachineIdPrefix.toString() +
-		                                     locality.machineId().get().toString()))
-		           .present() ||
-		       get(encodeFailedLocalityKey(LocalityData::ExcludeLocalityKeyMachineIdPrefix.toString() +
-		                                   locality.machineId().get().toString()))
-		           .present();
 	}
 
 	return false;

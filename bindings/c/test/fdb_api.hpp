@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,6 +38,51 @@
 
 // introduce the option enums
 #include <fdb_c_options.g.h>
+
+namespace std {
+template <>
+struct char_traits<uint8_t> {
+	using char_type = uint8_t;
+	using int_type = int;
+	using off_type = streamoff;
+	using pos_type = streampos;
+	using state_type = mbstate_t;
+
+	static void assign(char_type& c1, const char_type& c2) noexcept { c1 = c2; }
+	static bool eq(char_type c1, char_type c2) noexcept { return c1 == c2; }
+	static bool lt(char_type c1, char_type c2) noexcept { return c1 < c2; }
+
+	static int compare(const char_type* s1, const char_type* s2, size_t n) { return memcmp(s1, s2, n); }
+
+	static size_t length(const char_type* s) { return strlen(reinterpret_cast<const char*>(s)); }
+
+	static const char_type* find(const char_type* s, size_t n, const char_type& a) {
+		return reinterpret_cast<const char_type*>(memchr(s, a, n));
+	}
+
+	static char_type* move(char_type* s1, const char_type* s2, size_t n) {
+		return reinterpret_cast<char_type*>(memmove(s1, s2, n));
+	}
+
+	static char_type* copy(char_type* s1, const char_type* s2, size_t n) {
+		return reinterpret_cast<char_type*>(memcpy(s1, s2, n));
+	}
+
+	static char_type* assign(char_type* s, size_t n, char_type a) {
+		return reinterpret_cast<char_type*>(memset(s, a, n));
+	}
+
+	static int_type not_eof(int_type c) noexcept { return (c == eof()) ? 0 : c; }
+
+	static char_type to_char_type(int_type c) noexcept { return static_cast<char_type>(c); }
+
+	static int_type to_int_type(char_type c) noexcept { return static_cast<int_type>(c); }
+
+	static bool eq_int_type(int_type c1, int_type c2) noexcept { return c1 == c2; }
+
+	static int_type eof() noexcept { return static_cast<int_type>(EOF); }
+};
+} // namespace std
 
 namespace fdb {
 
@@ -76,100 +121,6 @@ struct KeyRange {
 	Key endKey;
 };
 
-template <class T>
-class VectorRef {
-public:
-	VectorRef(T* data, int size) : m_data(data), m_size(size) {}
-	VectorRef() = default;
-	VectorRef(const VectorRef& r) = default;
-	VectorRef(VectorRef&& r) noexcept = default;
-	VectorRef& operator=(const VectorRef& r) = default;
-	VectorRef& operator=(VectorRef&& r) noexcept = default;
-
-	int size() { return m_size; }
-	T* begin() { return m_data; }
-	T* end() { return m_data + m_size; }
-	T& front() { return *begin(); }
-	T& back() { return end()[-1]; }
-	T& operator[](int i) { return m_data[i]; }
-
-	const T* begin() const { return m_data; }
-	const T* end() const { return m_data + m_size; }
-	T const& front() const { return *begin(); }
-	T const& back() const { return end()[-1]; }
-	int size() const { return m_size; }
-	bool empty() const { return m_size == 0; }
-	const T& operator[](int i) const { return m_data[i]; }
-
-private:
-	T* m_data;
-	int m_size;
-};
-
-struct GranuleSummary {
-	KeyRange keyRange;
-	int64_t snapshotVersion;
-	int64_t snapshotSize;
-	int64_t deltaVersion;
-	int64_t deltaSize;
-
-	GranuleSummary(const native::FDBGranuleSummary& nativeSummary) {
-		keyRange.beginKey = fdb::Key(nativeSummary.key_range.begin_key, nativeSummary.key_range.begin_key_length);
-		keyRange.endKey = fdb::Key(nativeSummary.key_range.end_key, nativeSummary.key_range.end_key_length);
-		snapshotVersion = nativeSummary.snapshot_version;
-		snapshotSize = nativeSummary.snapshot_size;
-		deltaVersion = nativeSummary.delta_version;
-		deltaSize = nativeSummary.delta_size;
-	}
-};
-
-// fdb_future_readbg_get_descriptions
-
-struct GranuleFilePointerRef : public native::FDBBGFilePointerV2 {
-	GranuleFilePointerRef(const GranuleFilePointerRef&) = delete;
-	BytesRef filename() const noexcept { return BytesRef(filename_ptr, filename_length); }
-};
-
-struct GranuleMutationRef : public native::FDBBGMutation {
-	ByteString param1() const noexcept { return ByteString(param1_ptr, param1_length); }
-	ByteString param2() const noexcept { return ByteString(param2_ptr, param2_length); }
-};
-
-struct GranuleDescriptionRef : native::FDBBGFileDescriptionV2 {
-	GranuleDescriptionRef(const GranuleDescriptionRef&) = delete;
-	const KeyRangeRef& keyRange() const noexcept { return (KeyRangeRef&)key_range; }
-	KeyRef beginKey() const noexcept { return KeyRef(key_range.begin_key, key_range.begin_key_length); }
-	KeyRef endKey() const noexcept { return KeyRef(key_range.end_key, key_range.end_key_length); }
-	GranuleFilePointerRef* snapshotFile() const noexcept { return (GranuleFilePointerRef*)snapshot_file_pointer; }
-	VectorRef<GranuleFilePointerRef*> deltaFiles() const noexcept {
-		return VectorRef<GranuleFilePointerRef*>((GranuleFilePointerRef**)delta_files, delta_file_count);
-	}
-	VectorRef<GranuleMutationRef*> memoryMutations() const noexcept {
-		return VectorRef<GranuleMutationRef*>((GranuleMutationRef**)memory_mutations, memory_mutation_count);
-	}
-};
-
-struct GranuleFilePointerRefV1 : public native::FDBBGFilePointerV1 {
-	GranuleFilePointerRefV1(const GranuleFilePointerRefV1&) = delete;
-	BytesRef filename() const noexcept { return BytesRef(filename_ptr, filename_length); }
-};
-
-struct GranuleDescriptionRefV1 : native::FDBBGFileDescriptionV1 {
-	GranuleDescriptionRefV1(const GranuleDescriptionRefV1&) = delete;
-	const KeyRangeRef& keyRange() const noexcept { return (KeyRangeRef&)key_range; }
-	KeyRef beginKey() const noexcept { return KeyRef(key_range.begin_key, key_range.begin_key_length); }
-	KeyRef endKey() const noexcept { return KeyRef(key_range.end_key, key_range.end_key_length); }
-	GranuleFilePointerRefV1* snapshotFile() const noexcept {
-		return snapshot_present ? (GranuleFilePointerRefV1*)&snapshot_file_pointer : nullptr;
-	}
-	VectorRef<GranuleFilePointerRefV1> deltaFiles() const noexcept {
-		return VectorRef<GranuleFilePointerRefV1>((GranuleFilePointerRefV1*)delta_files, delta_file_count);
-	}
-	VectorRef<GranuleMutationRef> memoryMutations() const noexcept {
-		return VectorRef<GranuleMutationRef>((GranuleMutationRef*)memory_mutations, memory_mutation_count);
-	}
-};
-
 inline uint8_t const* toBytePtr(char const* ptr) noexcept {
 	return reinterpret_cast<uint8_t const*>(ptr);
 }
@@ -201,12 +152,12 @@ CharsRef toCharsRef(const std::optional<StringLike<Char>>& s) noexcept {
 
 [[maybe_unused]] constexpr const bool OverflowCheck = false;
 
-inline int intSize(BytesRef b) {
+inline int intSize(size_t size) {
 	if constexpr (OverflowCheck) {
-		if (b.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
+		if (size > static_cast<size_t>(std::numeric_limits<int>::max()))
 			throw std::overflow_error("byte strlen goes beyond int bounds");
 	}
-	return static_cast<int>(b.size());
+	return static_cast<int>(size);
 }
 
 template <template <class...> class StringLike, class Char>
@@ -414,76 +365,6 @@ struct KeyRangeRefArray {
 	}
 };
 
-struct GranuleSummaryRef : native::FDBGranuleSummary {
-	fdb::KeyRef beginKey() const noexcept {
-		return fdb::KeyRef(native::FDBGranuleSummary::key_range.begin_key,
-		                   native::FDBGranuleSummary::key_range.begin_key_length);
-	}
-	fdb::KeyRef endKey() const noexcept {
-		return fdb::KeyRef(native::FDBGranuleSummary::key_range.end_key,
-		                   native::FDBGranuleSummary::key_range.end_key_length);
-	}
-};
-
-struct GranuleSummaryRefArray {
-	using Type = std::tuple<GranuleSummaryRef const*, int>;
-	static Error extract(native::FDBFuture* f, Type& out) noexcept {
-		auto& [out_summaries, out_count] = out;
-		auto err = native::fdb_future_get_granule_summary_array(
-		    f, reinterpret_cast<const native::FDBGranuleSummary**>(&out_summaries), &out_count);
-		return Error(err);
-	}
-};
-
-// fdb_future_readbg_get_descriptions
-
-struct GranuleDescriptionRef : native::FDBBGFileDescription {
-	fdb::KeyRef beginKey() const noexcept {
-		return fdb::KeyRef(native::FDBBGFileDescription::key_range.begin_key,
-		                   native::FDBBGFileDescription::key_range.begin_key_length);
-	}
-	fdb::KeyRef endKey() const noexcept {
-		return fdb::KeyRef(native::FDBBGFileDescription::key_range.end_key,
-		                   native::FDBBGFileDescription::key_range.end_key_length);
-	}
-};
-
-struct GranuleDescriptionRefArray {
-	using Type = std::tuple<GranuleDescriptionRef*, int>;
-	static Error extract(native::FDBFuture* f, Type& out) noexcept {
-		auto& [out_desc, out_count] = out;
-		auto err = native::fdb_future_readbg_get_descriptions(
-		    f, reinterpret_cast<native::FDBBGFileDescription**>(&out_desc), &out_count);
-		return Error(err);
-	}
-};
-
-struct ReadBlobGranulesDescriptionResultV1 {
-	using Type = fdb::ReadBlobGranulesDescriptionResultV1;
-	static Error extract(native::FDBFuture* f, Type& out) noexcept {
-		native::FDBBGFileDescriptionV1* descs;
-		int desc_cnt;
-		auto err = native::fdb_future_readbg_get_descriptions(f, &descs, &desc_cnt);
-		out = Type((GranuleDescriptionRefV1*)descs, desc_cnt);
-		return Error(err);
-	}
-};
-
-template <class ResType>
-struct Result {
-	using Type = ResType;
-	static Error extract(native::FDBFuture* f, Type& out) noexcept {
-		typename ResType::DataType* res;
-		auto err = native::fdb_future_get_result(f, (native::FDBResult**)&res);
-		if (!err) {
-			out = ResType::create(res);
-		}
-		return Error(err);
-	}
-};
-
-using ReadBlobGranulesDescriptionResult = Result<fdb::ReadBlobGranulesDescriptionResult>;
-
 } // namespace future_var
 
 inline int maxApiVersion() {
@@ -493,7 +374,7 @@ inline int maxApiVersion() {
 namespace network {
 
 inline Error setOptionNothrow(FDBNetworkOption option, BytesRef str) noexcept {
-	return Error(native::fdb_network_set_option(option, str.data(), intSize(str)));
+	return Error(native::fdb_network_set_option(option, str.data(), intSize(str.size())));
 }
 
 inline Error setOptionNothrow(FDBNetworkOption option, CharsRef str) noexcept {
@@ -555,6 +436,35 @@ inline Error stop() {
 
 class Transaction;
 class Database;
+
+class Result {
+	friend class Transaction;
+	std::shared_ptr<native::FDBResult> r;
+
+	Result(native::FDBResult* result) {
+		if (result)
+			r = std::shared_ptr<native::FDBResult>(result, &native::fdb_result_destroy);
+	}
+
+public:
+	using KeyValueRefArray = future_var::KeyValueRefArray::Type;
+
+	Error getKeyValueArrayNothrow(KeyValueRefArray& out) const noexcept {
+		auto out_more_native = native::fdb_bool_t{};
+		auto& [out_kv, out_count, out_more] = out;
+		auto err_raw = native::fdb_result_get_keyvalue_array(
+		    r.get(), reinterpret_cast<const native::FDBKeyValue**>(&out_kv), &out_count, &out_more_native);
+		out_more = out_more_native != 0;
+		return Error(err_raw);
+	}
+
+	KeyValueRefArray getKeyValueArray() const {
+		auto ret = KeyValueRefArray{};
+		if (auto err = getKeyValueArrayNothrow(ret))
+			throwError("ERROR: result_get_keyvalue_array(): ", err);
+		return ret;
+	}
+};
 
 class Future {
 protected:
@@ -652,7 +562,7 @@ template <typename VarTraits>
 class TypedFuture : public Future {
 	friend class Future;
 	friend class Transaction;
-	friend class Tenant;
+
 	using SelfType = TypedFuture<VarTraits>;
 	using Future::Future;
 	// hide type-unsafe inherited functions
@@ -686,26 +596,25 @@ struct KeySelector {
 namespace key_select {
 
 inline KeySelector firstGreaterThan(KeyRef key, int offset = 0) {
-	return KeySelector{ FDB_KEYSEL_FIRST_GREATER_THAN(key.data(), intSize(key)) + offset };
+	return KeySelector{ FDB_KEYSEL_FIRST_GREATER_THAN(key.data(), intSize(key.size())) + offset };
 }
 
 inline KeySelector firstGreaterOrEqual(KeyRef key, int offset = 0) {
-	return KeySelector{ FDB_KEYSEL_FIRST_GREATER_OR_EQUAL(key.data(), intSize(key)) + offset };
+	return KeySelector{ FDB_KEYSEL_FIRST_GREATER_OR_EQUAL(key.data(), intSize(key.size())) + offset };
 }
 
 inline KeySelector lastLessThan(KeyRef key, int offset = 0) {
-	return KeySelector{ FDB_KEYSEL_LAST_LESS_THAN(key.data(), intSize(key)) + offset };
+	return KeySelector{ FDB_KEYSEL_LAST_LESS_THAN(key.data(), intSize(key.size())) + offset };
 }
 
 inline KeySelector lastLessOrEqual(KeyRef key, int offset = 0) {
-	return KeySelector{ FDB_KEYSEL_LAST_LESS_OR_EQUAL(key.data(), intSize(key)) + offset };
+	return KeySelector{ FDB_KEYSEL_LAST_LESS_OR_EQUAL(key.data(), intSize(key.size())) + offset };
 }
 
 } // namespace key_select
 
 class Transaction {
 	friend class Database;
-	friend class Tenant;
 	std::shared_ptr<native::FDBTransaction> tr;
 
 	explicit Transaction(native::FDBTransaction* tr_raw) {
@@ -736,7 +645,7 @@ public:
 	}
 
 	Error setOptionNothrow(FDBTransactionOption option, BytesRef str) noexcept {
-		return Error(native::fdb_transaction_set_option(tr.get(), option, str.data(), intSize(str)));
+		return Error(native::fdb_transaction_set_option(tr.get(), option, str.data(), intSize(str.size())));
 	}
 
 	Error setOptionNothrow(FDBTransactionOption option, CharsRef str) noexcept {
@@ -787,7 +696,7 @@ public:
 	}
 
 	TypedFuture<future_var::ValueRef> get(KeyRef key, bool snapshot) {
-		return native::fdb_transaction_get(tr.get(), key.data(), intSize(key), snapshot);
+		return native::fdb_transaction_get(tr.get(), key.data(), intSize(key.size()), snapshot);
 	}
 
 	// Usage: tx.getRange(key_select::firstGreaterOrEqual(firstKey), key_select::lastLessThan(lastKey), ...)
@@ -817,82 +726,8 @@ public:
 		                                         reverse);
 	}
 
-	TypedFuture<future_var::KeyRangeRefArray> getBlobGranuleRanges(KeyRef begin, KeyRef end, int rangeLimit) {
-		return native::fdb_transaction_get_blob_granule_ranges(
-		    tr.get(), begin.data(), intSize(begin), end.data(), intSize(end), rangeLimit);
-	}
-
-	ReadRangeResult readBlobGranules(KeyRef begin,
-	                                 KeyRef end,
-	                                 int64_t begin_version,
-	                                 int64_t read_version,
-	                                 native::FDBReadBlobGranuleContext context) {
-		return ReadRangeResult::create((native::FDBReadRangeResult*)native::fdb_transaction_read_blob_granules(
-		    tr.get(), begin.data(), intSize(begin), end.data(), intSize(end), begin_version, read_version, context));
-	}
-
-	TypedFuture<future_var::GranuleSummaryRefArray> summarizeBlobGranules(KeyRef begin,
-	                                                                      KeyRef end,
-	                                                                      int64_t summaryVersion,
-	                                                                      int rangeLimit) {
-		return native::fdb_transaction_summarize_blob_granules(
-		    tr.get(), begin.data(), intSize(begin), end.data(), intSize(end), summaryVersion, rangeLimit);
-	}
-
 	TypedFuture<future_var::None> watch(KeyRef key) {
-		return native::fdb_transaction_watch(tr.get(), key.data(), intSize(key));
-	}
-
-	TypedFuture<future_var::ReadBlobGranulesDescriptionResult> readBlobGranulesDescription(KeyRef begin,
-	                                                                                       KeyRef end,
-	                                                                                       int64_t beginVersion,
-	                                                                                       int64_t readVersion) {
-		return native::fdb_transaction_read_blob_granules_description_v2(
-		    tr.get(), begin.data(), intSize(begin), end.data(), intSize(end), beginVersion, readVersion);
-	}
-
-	TypedFuture<future_var::ReadBlobGranulesDescriptionResultV1> readBlobGranulesDescriptionV1(
-	    KeyRef begin,
-	    KeyRef end,
-	    int64_t beginVersion,
-	    int64_t readVersion,
-	    int64_t* readVersionOut) {
-		return native::fdb_transaction_read_blob_granules_description(tr.get(),
-		                                                              begin.data(),
-		                                                              intSize(begin),
-		                                                              end.data(),
-		                                                              intSize(end),
-		                                                              beginVersion,
-		                                                              readVersion,
-		                                                              readVersionOut);
-	}
-
-	ReadRangeResult parseSnapshotFile(BytesRef fileData,
-	                                  native::FDBBGTenantPrefix const* tenantPrefix,
-	                                  native::FDBBGEncryptionCtxV2 const* encryptionCtx) {
-		return ReadRangeResult::create((native::FDBReadRangeResult*)native::fdb_readbg_parse_snapshot_file_v2(
-		    fileData.data(), intSize(fileData), tenantPrefix, encryptionCtx));
-	}
-
-	ReadRangeResult parseSnapshotFileV1(BytesRef fileData,
-	                                    native::FDBBGTenantPrefix const* tenantPrefix,
-	                                    native::FDBBGEncryptionCtxV1 const* encryptionCtx) {
-		return ReadRangeResult::create((native::FDBReadRangeResult*)native::fdb_readbg_parse_snapshot_file(
-		    fileData.data(), intSize(fileData), tenantPrefix, encryptionCtx));
-	}
-
-	ReadBGMutationsResult parseDeltaFile(BytesRef fileData,
-	                                     native::FDBBGTenantPrefix const* tenantPrefix,
-	                                     native::FDBBGEncryptionCtxV2 const* encryptionCtx) {
-		return ReadBGMutationsResult::create((native::FDBReadBGMutationsResult*)native::fdb_readbg_parse_delta_file_v2(
-		    fileData.data(), intSize(fileData), tenantPrefix, encryptionCtx));
-	}
-
-	ReadBGMutationsResult parseDeltaFileV1(BytesRef fileData,
-	                                       native::FDBBGTenantPrefix const* tenantPrefix,
-	                                       native::FDBBGEncryptionCtxV1 const* encryptionCtx) {
-		return ReadBGMutationsResult::create((native::FDBReadBGMutationsResult*)native::fdb_readbg_parse_delta_file(
-		    fileData.data(), intSize(fileData), tenantPrefix, encryptionCtx));
+		return native::fdb_transaction_watch(tr.get(), key.data(), intSize(key.size()));
 	}
 
 	TypedFuture<future_var::None> commit() { return native::fdb_transaction_commit(tr.get()); }
@@ -904,23 +739,24 @@ public:
 	void cancel() { return native::fdb_transaction_cancel(tr.get()); }
 
 	void set(KeyRef key, ValueRef value) {
-		native::fdb_transaction_set(tr.get(), key.data(), intSize(key), value.data(), intSize(value));
+		native::fdb_transaction_set(tr.get(), key.data(), intSize(key.size()), value.data(), intSize(value.size()));
 	}
 
 	void atomicOp(KeyRef key, ValueRef param, FDBMutationType operationType) {
 		native::fdb_transaction_atomic_op(
-		    tr.get(), key.data(), intSize(key), param.data(), intSize(param), operationType);
+		    tr.get(), key.data(), intSize(key.size()), param.data(), intSize(param.size()), operationType);
 	}
 
-	void clear(KeyRef key) { native::fdb_transaction_clear(tr.get(), key.data(), intSize(key)); }
+	void clear(KeyRef key) { native::fdb_transaction_clear(tr.get(), key.data(), intSize(key.size())); }
 
 	void clearRange(KeyRef begin, KeyRef end) {
-		native::fdb_transaction_clear_range(tr.get(), begin.data(), intSize(begin), end.data(), intSize(end));
+		native::fdb_transaction_clear_range(
+		    tr.get(), begin.data(), intSize(begin.size()), end.data(), intSize(end.size()));
 	}
 
 	void addConflictRange(KeyRef begin, KeyRef end, FDBConflictRangeType rangeType) {
 		if (auto err = Error(native::fdb_transaction_add_conflict_range(
-		        tr.get(), begin.data(), intSize(begin), end.data(), intSize(end), rangeType))) {
+		        tr.get(), begin.data(), intSize(begin.size()), end.data(), intSize(end.size()), rangeType))) {
 			throwError("fdb_transaction_add_conflict_range returned error: ", err);
 		}
 	}
@@ -932,147 +768,15 @@ public:
 	}
 };
 
-// Handle this as an abstract class instead of interface to preserve lifetime of fdb objects owned by Tenant and
-// Database.
+// Handle this as an abstract class instead of interface to preserve lifetime of fdb objects owned by Database.
 class IDatabaseOps {
 public:
 	virtual ~IDatabaseOps() = default;
 
 	virtual Transaction createTransaction() = 0;
-
-	virtual TypedFuture<future_var::Bool> blobbifyRange(KeyRef begin, KeyRef end) = 0;
-	virtual TypedFuture<future_var::Bool> blobbifyRangeBlocking(KeyRef begin, KeyRef end) = 0;
-	virtual TypedFuture<future_var::Bool> unblobbifyRange(KeyRef begin, KeyRef end) = 0;
-	virtual TypedFuture<future_var::KeyRangeRefArray> listBlobbifiedRanges(KeyRef begin,
-	                                                                       KeyRef end,
-	                                                                       int rangeLimit) = 0;
-	virtual TypedFuture<future_var::Int64> verifyBlobRange(KeyRef begin, KeyRef end, int64_t version) = 0;
-	virtual TypedFuture<future_var::Bool> flushBlobRange(KeyRef begin, KeyRef end, bool compact, int64_t version) = 0;
-	virtual TypedFuture<future_var::KeyRef> purgeBlobGranules(KeyRef begin,
-	                                                          KeyRef end,
-	                                                          int64_t version,
-	                                                          bool force) = 0;
-	virtual TypedFuture<future_var::None> waitPurgeGranulesComplete(KeyRef purgeKey) = 0;
-};
-
-class Tenant final : public IDatabaseOps {
-	friend class Database;
-	std::shared_ptr<native::FDBTenant> tenant;
-
-	explicit Tenant(native::FDBTenant* tenant_raw) {
-		if (tenant_raw)
-			tenant = std::shared_ptr<native::FDBTenant>(tenant_raw, &native::fdb_tenant_destroy);
-	}
-
-public:
-	// This should only be mutated by API versioning
-	static inline CharsRef tenantManagementMapPrefix = "\xff\xff/management/tenant/map/";
-
-	Tenant(const Tenant&) noexcept = default;
-	Tenant& operator=(const Tenant&) noexcept = default;
-	Tenant() noexcept : tenant(nullptr) {}
-
-	void atomic_store(Tenant other) { std::atomic_store(&tenant, other.tenant); }
-
-	Tenant atomic_load() {
-		Tenant retVal;
-		retVal.tenant = std::atomic_load(&tenant);
-		return retVal;
-	}
-
-	static void createTenant(Transaction tr, BytesRef name) {
-		tr.setOption(FDBTransactionOption::FDB_TR_OPTION_SPECIAL_KEY_SPACE_ENABLE_WRITES, BytesRef());
-		tr.setOption(FDBTransactionOption::FDB_TR_OPTION_LOCK_AWARE, BytesRef());
-		tr.setOption(FDBTransactionOption::FDB_TR_OPTION_RAW_ACCESS, BytesRef());
-		tr.set(toBytesRef(fmt::format("{}{}", tenantManagementMapPrefix, toCharsRef(name))), BytesRef());
-	}
-
-	static void deleteTenant(Transaction tr, BytesRef name) {
-		tr.setOption(FDBTransactionOption::FDB_TR_OPTION_SPECIAL_KEY_SPACE_ENABLE_WRITES, BytesRef());
-		tr.setOption(FDBTransactionOption::FDB_TR_OPTION_RAW_ACCESS, BytesRef());
-		tr.setOption(FDBTransactionOption::FDB_TR_OPTION_LOCK_AWARE, BytesRef());
-		tr.clear(toBytesRef(fmt::format("{}{}", tenantManagementMapPrefix, toCharsRef(name))));
-	}
-
-	static TypedFuture<future_var::ValueRef> getTenant(Transaction tr, BytesRef name) {
-		tr.setOption(FDBTransactionOption::FDB_TR_OPTION_READ_SYSTEM_KEYS, BytesRef());
-		tr.setOption(FDBTransactionOption::FDB_TR_OPTION_LOCK_AWARE, BytesRef());
-		tr.setOption(FDBTransactionOption::FDB_TR_OPTION_RAW_ACCESS, BytesRef());
-		return tr.get(toBytesRef(fmt::format("{}{}", tenantManagementMapPrefix, toCharsRef(name))), false);
-	}
-
-	Transaction createTransaction() override {
-		auto tx_native = static_cast<native::FDBTransaction*>(nullptr);
-		auto err = Error(native::fdb_tenant_create_transaction(tenant.get(), &tx_native));
-		if (err)
-			throwError("Failed to create transaction: ", err);
-		return Transaction(tx_native);
-	}
-
-	TypedFuture<future_var::Bool> blobbifyRange(KeyRef begin, KeyRef end) override {
-		if (!tenant)
-			throw std::runtime_error("blobbifyRange() from null tenant");
-		return native::fdb_tenant_blobbify_range(tenant.get(), begin.data(), intSize(begin), end.data(), intSize(end));
-	}
-
-	TypedFuture<future_var::Bool> blobbifyRangeBlocking(KeyRef begin, KeyRef end) override {
-		if (!tenant)
-			throw std::runtime_error("blobbifyRangeBlocking() from null tenant");
-		return native::fdb_tenant_blobbify_range_blocking(
-		    tenant.get(), begin.data(), intSize(begin), end.data(), intSize(end));
-	}
-
-	TypedFuture<future_var::Bool> unblobbifyRange(KeyRef begin, KeyRef end) override {
-		if (!tenant)
-			throw std::runtime_error("unblobbifyRange() from null tenant");
-		return native::fdb_tenant_unblobbify_range(
-		    tenant.get(), begin.data(), intSize(begin), end.data(), intSize(end));
-	}
-
-	TypedFuture<future_var::KeyRangeRefArray> listBlobbifiedRanges(KeyRef begin, KeyRef end, int rangeLimit) override {
-		if (!tenant)
-			throw std::runtime_error("listBlobbifiedRanges() from null tenant");
-		return native::fdb_tenant_list_blobbified_ranges(
-		    tenant.get(), begin.data(), intSize(begin), end.data(), intSize(end), rangeLimit);
-	}
-
-	TypedFuture<future_var::Int64> verifyBlobRange(KeyRef begin, KeyRef end, int64_t version) override {
-		if (!tenant)
-			throw std::runtime_error("verifyBlobRange() from null tenant");
-		return native::fdb_tenant_verify_blob_range(
-		    tenant.get(), begin.data(), intSize(begin), end.data(), intSize(end), version);
-	}
-
-	TypedFuture<future_var::Bool> flushBlobRange(KeyRef begin, KeyRef end, bool compact, int64_t version) override {
-		if (!tenant)
-			throw std::runtime_error("flushBlobRange() from null tenant");
-		return native::fdb_tenant_flush_blob_range(
-		    tenant.get(), begin.data(), intSize(begin), end.data(), intSize(end), compact, version);
-	}
-
-	TypedFuture<future_var::Int64> getId() {
-		if (!tenant)
-			throw std::runtime_error("getId() from null tenant");
-		return native::fdb_tenant_get_id(tenant.get());
-	}
-
-	TypedFuture<future_var::KeyRef> purgeBlobGranules(KeyRef begin, KeyRef end, int64_t version, bool force) override {
-		if (!tenant)
-			throw std::runtime_error("purgeBlobGranules() from null tenant");
-		native::fdb_bool_t forceBool = force;
-		return native::fdb_tenant_purge_blob_granules(
-		    tenant.get(), begin.data(), intSize(begin), end.data(), intSize(end), version, forceBool);
-	}
-
-	TypedFuture<future_var::None> waitPurgeGranulesComplete(KeyRef purgeKey) override {
-		if (!tenant)
-			throw std::runtime_error("waitPurgeGranulesComplete() from null tenant");
-		return native::fdb_tenant_wait_purge_granules_complete(tenant.get(), purgeKey.data(), intSize(purgeKey));
-	}
 };
 
 class Database : public IDatabaseOps {
-	friend class Tenant;
 	std::shared_ptr<native::FDBDatabase> db;
 
 public:
@@ -1100,7 +804,7 @@ public:
 	}
 
 	Error setOptionNothrow(FDBDatabaseOption option, BytesRef str) noexcept {
-		return Error(native::fdb_database_set_option(db.get(), option, str.data(), intSize(str)));
+		return Error(native::fdb_database_set_option(db.get(), option, str.data(), intSize(str.size())));
 	}
 
 	void setOption(FDBDatabaseOption option, int64_t value) {
@@ -1120,16 +824,6 @@ public:
 		}
 	}
 
-	Tenant openTenant(BytesRef name) {
-		if (!db)
-			throw std::runtime_error("openTenant from null database");
-		auto tenant_native = static_cast<native::FDBTenant*>(nullptr);
-		if (auto err = Error(native::fdb_database_open_tenant(db.get(), name.data(), name.size(), &tenant_native))) {
-			throwError(fmt::format("Failed to open tenant with name '{}': ", toCharsRef(name)), err);
-		}
-		return Tenant(tenant_native);
-	}
-
 	Transaction createTransaction() override {
 		if (!db)
 			throw std::runtime_error("create_transaction from null database");
@@ -1140,67 +834,10 @@ public:
 		return Transaction(tx_native);
 	}
 
-	TypedFuture<future_var::KeyRangeRefArray> listBlobbifiedRanges(KeyRef begin, KeyRef end, int rangeLimit) override {
-		if (!db)
-			throw std::runtime_error("listBlobbifiedRanges from null database");
-		return native::fdb_database_list_blobbified_ranges(
-		    db.get(), begin.data(), intSize(begin), end.data(), intSize(end), rangeLimit);
-	}
-
-	TypedFuture<future_var::Int64> verifyBlobRange(KeyRef begin, KeyRef end, int64_t version) override {
-		if (!db)
-			throw std::runtime_error("verifyBlobRange from null database");
-		return native::fdb_database_verify_blob_range(
-		    db.get(), begin.data(), intSize(begin), end.data(), intSize(end), version);
-	}
-
-	TypedFuture<future_var::Bool> flushBlobRange(KeyRef begin, KeyRef end, bool compact, int64_t version) override {
-		if (!db)
-			throw std::runtime_error("flushBlobRange from null database");
-		return native::fdb_database_flush_blob_range(
-		    db.get(), begin.data(), intSize(begin), end.data(), intSize(end), compact, version);
-	}
-
-	TypedFuture<future_var::Bool> blobbifyRange(KeyRef begin, KeyRef end) override {
-		if (!db)
-			throw std::runtime_error("blobbifyRange from null database");
-		return native::fdb_database_blobbify_range(db.get(), begin.data(), intSize(begin), end.data(), intSize(end));
-	}
-
-	TypedFuture<future_var::Bool> blobbifyRangeBlocking(KeyRef begin, KeyRef end) override {
-		if (!db)
-			throw std::runtime_error("blobbifyRangeBlocking from null database");
-		return native::fdb_database_blobbify_range_blocking(
-		    db.get(), begin.data(), intSize(begin), end.data(), intSize(end));
-	}
-
-	TypedFuture<future_var::Bool> unblobbifyRange(KeyRef begin, KeyRef end) override {
-		if (!db)
-			throw std::runtime_error("unblobbifyRange from null database");
-		return native::fdb_database_unblobbify_range(db.get(), begin.data(), intSize(begin), end.data(), intSize(end));
-	}
-
-	TypedFuture<future_var::KeyRef> purgeBlobGranules(KeyRef begin, KeyRef end, int64_t version, bool force) override {
-		if (!db)
-			throw std::runtime_error("purgeBlobGranules from null database");
-		native::fdb_bool_t forceBool = force;
-		return native::fdb_database_purge_blob_granules(
-		    db.get(), begin.data(), intSize(begin), end.data(), intSize(end), version, forceBool);
-	}
-
-	TypedFuture<future_var::None> waitPurgeGranulesComplete(KeyRef purgeKey) override {
-		if (!db)
-			throw std::runtime_error("purgeBlobGranules from null database");
-		return native::fdb_database_wait_purge_granules_complete(db.get(), purgeKey.data(), intSize(purgeKey));
-	}
-
 	TypedFuture<future_var::KeyRef> getClientStatus() { return native::fdb_database_get_client_status(db.get()); }
 };
 
 inline Error selectApiVersionNothrow(int version) {
-	if (version < FDB_API_VERSION_TENANT_API_RELEASED) {
-		Tenant::tenantManagementMapPrefix = "\xff\xff/management/tenant_map/";
-	}
 	return Error(native::fdb_select_api_version(version));
 }
 
@@ -1211,9 +848,6 @@ inline void selectApiVersion(int version) {
 }
 
 inline Error selectApiVersionCappedNothrow(int version) {
-	if (version < FDB_API_VERSION_TENANT_API_RELEASED) {
-		Tenant::tenantManagementMapPrefix = "\xff\xff/management/tenant_map/";
-	}
 	return Error(
 	    native::fdb_select_api_version_impl(version, std::min(native::fdb_get_max_api_version(), FDB_API_VERSION)));
 }

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,9 +26,11 @@
 #include <assert.h>
 #include <string.h>
 
+#include <algorithm>
 #include <condition_variable>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -269,7 +271,6 @@ GetMappedRangeResult get_mapped_range(fdb::Transaction& tr,
                                       int target_bytes,
                                       FDBStreamingMode mode,
                                       int iteration,
-                                      int matchIndex,
                                       fdb_bool_t snapshot,
                                       fdb_bool_t reverse) {
 	fdb::MappedKeyValueArrayFuture f1 = tr.get_mapped_range(begin_key_name,
@@ -286,7 +287,6 @@ GetMappedRangeResult get_mapped_range(fdb::Transaction& tr,
 	                                                        target_bytes,
 	                                                        mode,
 	                                                        iteration,
-	                                                        matchIndex,
 	                                                        snapshot,
 	                                                        reverse);
 
@@ -961,11 +961,7 @@ std::map<std::string, std::string> fillInRecords(int n) {
 	return data;
 }
 
-GetMappedRangeResult getMappedIndexEntries(int beginId,
-                                           int endId,
-                                           fdb::Transaction& tr,
-                                           std::string mapper,
-                                           int matchIndex) {
+GetMappedRangeResult getMappedIndexEntries(int beginId, int endId, fdb::Transaction& tr, std::string mapper) {
 	std::string indexEntryKeyBegin = indexEntryKey(beginId);
 	std::string indexEntryKeyEnd = indexEntryKey(endId);
 
@@ -979,19 +975,14 @@ GetMappedRangeResult getMappedIndexEntries(int beginId,
 	    /* target_bytes */ 0,
 	    /* FDBStreamingMode */ FDB_STREAMING_MODE_WANT_ALL,
 	    /* iteration */ 0,
-	    /* matchIndex */ matchIndex,
 	    /* snapshot */ false,
 	    /* reverse */ 0);
 }
 
-GetMappedRangeResult getMappedIndexEntries(int beginId,
-                                           int endId,
-                                           fdb::Transaction& tr,
-                                           int matchIndex,
-                                           bool allMissing) {
+GetMappedRangeResult getMappedIndexEntries(int beginId, int endId, fdb::Transaction& tr, bool allMissing) {
 	std::string mapper =
 	    Tuple::makeTuple(prefix, RECORD, (allMissing ? "{K[2]}"_sr : "{K[3]}"_sr), "{...}"_sr).pack().toString();
-	return getMappedIndexEntries(beginId, endId, tr, mapper, matchIndex);
+	return getMappedIndexEntries(beginId, endId, tr, mapper);
 }
 
 TEST_CASE("versionstamp_unit_test") {
@@ -1032,9 +1023,9 @@ TEST_CASE("tuple_support_versionstamp") {
 	ASSERT(t.getVersionstamp(2) == vs);
 
 	// verify the round-way pack-unpack path for a Tuple containing a versionstamp
-	StringRef result1 = t.pack();
+	Standalone<StringRef> result1 = t.pack();
 	Tuple t2 = Tuple::unpack(result1);
-	StringRef result2 = t2.pack();
+	Standalone<StringRef> result2 = t2.pack();
 	ASSERT(t2.getVersionstamp(2) == vs);
 	ASSERT(result1.toString() == result2.toString());
 }
@@ -1070,16 +1061,7 @@ TEST_CASE("fdb_transaction_get_mapped_range") {
 	while (1) {
 		int beginId = 1;
 		int endId = 19;
-		const double r = deterministicRandom()->random01();
-		int matchIndex = MATCH_INDEX_ALL;
-		if (r < 0.25) {
-			matchIndex = MATCH_INDEX_NONE;
-		} else if (r < 0.5) {
-			matchIndex = MATCH_INDEX_MATCHED_ONLY;
-		} else if (r < 0.75) {
-			matchIndex = MATCH_INDEX_UNMATCHED_ONLY;
-		}
-		auto result = getMappedIndexEntries(beginId, endId, tr, matchIndex, false);
+		auto result = getMappedIndexEntries(beginId, endId, tr, false);
 
 		if (result.err) {
 			fdb::EmptyFuture f1 = tr.on_error(result.err);
@@ -1094,15 +1076,7 @@ TEST_CASE("fdb_transaction_get_mapped_range") {
 		int id = beginId;
 		for (int i = 0; i < expectSize; i++, id++) {
 			const auto& mkv = result.mkvs[i];
-			if (matchIndex == MATCH_INDEX_ALL || i == 0 || i == expectSize - 1) {
-				CHECK(indexEntryKey(id).compare(mkv.key) == 0);
-			} else if (matchIndex == MATCH_INDEX_MATCHED_ONLY) {
-				CHECK(indexEntryKey(id).compare(mkv.key) == 0);
-			} else if (matchIndex == MATCH_INDEX_UNMATCHED_ONLY) {
-				CHECK(EMPTY.compare(mkv.key) == 0);
-			} else {
-				CHECK(EMPTY.compare(mkv.key) == 0);
-			}
+			CHECK(indexEntryKey(id).compare(mkv.key) == 0);
 			CHECK(EMPTY.compare(mkv.value) == 0);
 			CHECK(mkv.range_results.size() == SPLIT_SIZE);
 			for (int split = 0; split < SPLIT_SIZE; split++) {
@@ -1124,16 +1098,7 @@ TEST_CASE("fdb_transaction_get_mapped_range_missing_all_secondary") {
 	while (1) {
 		int beginId = 1;
 		int endId = 19;
-		const double r = deterministicRandom()->random01();
-		int matchIndex = MATCH_INDEX_ALL;
-		if (r < 0.25) {
-			matchIndex = MATCH_INDEX_NONE;
-		} else if (r < 0.5) {
-			matchIndex = MATCH_INDEX_MATCHED_ONLY;
-		} else if (r < 0.75) {
-			matchIndex = MATCH_INDEX_UNMATCHED_ONLY;
-		}
-		auto result = getMappedIndexEntries(beginId, endId, tr, matchIndex, true);
+		auto result = getMappedIndexEntries(beginId, endId, tr, true);
 
 		if (result.err) {
 			fdb::EmptyFuture f1 = tr.on_error(result.err);
@@ -1148,15 +1113,7 @@ TEST_CASE("fdb_transaction_get_mapped_range_missing_all_secondary") {
 		int id = beginId;
 		for (int i = 0; i < expectSize; i++, id++) {
 			const auto& mkv = result.mkvs[i];
-			if (matchIndex == MATCH_INDEX_ALL || i == 0 || i == expectSize - 1) {
-				CHECK(indexEntryKey(id).compare(mkv.key) == 0);
-			} else if (matchIndex == MATCH_INDEX_MATCHED_ONLY) {
-				CHECK(EMPTY.compare(mkv.key) == 0);
-			} else if (matchIndex == MATCH_INDEX_UNMATCHED_ONLY) {
-				CHECK(indexEntryKey(id).compare(mkv.key) == 0);
-			} else {
-				CHECK(EMPTY.compare(mkv.key) == 0);
-			}
+			CHECK(indexEntryKey(id).compare(mkv.key) == 0);
 			CHECK(EMPTY.compare(mkv.value) == 0);
 		}
 		break;
@@ -1176,7 +1133,6 @@ TEST_CASE("fdb_transaction_get_mapped_range_restricted_to_serializable") {
 	    /* target_bytes */ 0,
 	    /* FDBStreamingMode */ FDB_STREAMING_MODE_WANT_ALL,
 	    /* iteration */ 0,
-	    /* matchIndex */ MATCH_INDEX_ALL,
 	    /* snapshot */ true, // Set snapshot to true
 	    /* reverse */ 0);
 	ASSERT(result.err == error_code_unsupported_operation);
@@ -1196,7 +1152,6 @@ TEST_CASE("fdb_transaction_get_mapped_range_restricted_to_ryw_enable") {
 	    /* target_bytes */ 0,
 	    /* FDBStreamingMode */ FDB_STREAMING_MODE_WANT_ALL,
 	    /* iteration */ 0,
-	    /* matchIndex */ MATCH_INDEX_ALL,
 	    /* snapshot */ false,
 	    /* reverse */ 0);
 	ASSERT(result.err == error_code_unsupported_operation);
@@ -1225,7 +1180,7 @@ TEST_CASE("fdb_transaction_get_mapped_range_fail_on_mapper_not_tuple") {
 	};
 	assertNotTuple(mapper);
 	fdb::Transaction tr(db);
-	auto result = getMappedIndexEntries(1, 3, tr, mapper, MATCH_INDEX_ALL);
+	auto result = getMappedIndexEntries(1, 3, tr, mapper);
 	ASSERT(result.err == error_code_mapper_not_tuple);
 }
 
@@ -2017,6 +1972,245 @@ TEST_CASE("fdb_database_get_server_protocol") {
 	fdb_future_destroy(protocolFuture);
 }
 
+TEST_CASE("CDC C binding end-to-end") {
+	using FuturePtr = std::unique_ptr<FDBFuture, decltype(&fdb_future_destroy)>;
+	using ConsumerPtr = std::unique_ptr<FDBCdcConsumer, decltype(&fdb_cdc_consumer_destroy)>;
+
+	auto ownFuture = [](FDBFuture* future) { return FuturePtr(future, &fdb_future_destroy); };
+	auto ownConsumer = [](FDBCdcConsumer* consumer) { return ConsumerPtr(consumer, &fdb_cdc_consumer_destroy); };
+	auto waitForSuccess = [](FDBFuture* future) {
+		fdb_check(fdb_future_block_until_ready(future));
+		fdb_check(fdb_future_get_error(future));
+	};
+	auto commitSetValues = [](std::vector<std::pair<std::string, std::string>> const& values) {
+		fdb::Transaction tr(db);
+		while (true) {
+			for (auto const& [key, value] : values) {
+				tr.set(key, value);
+			}
+			fdb::EmptyFuture commitFuture = tr.commit();
+			fdb_error_t err = wait_future(commitFuture);
+			if (err) {
+				fdb::EmptyFuture onErrorFuture = tr.on_error(err);
+				fdb_check(wait_future(onErrorFuture));
+				continue;
+			}
+			int64_t committedVersion;
+			fdb_check(tr.get_committed_version(&committedVersion));
+			return committedVersion;
+		}
+	};
+	auto commitClearRange = [](std::string const& begin, std::string const& end) {
+		fdb::Transaction tr(db);
+		while (true) {
+			tr.clear_range(begin, end);
+			fdb::EmptyFuture commitFuture = tr.commit();
+			fdb_error_t err = wait_future(commitFuture);
+			if (err) {
+				fdb::EmptyFuture onErrorFuture = tr.on_error(err);
+				fdb_check(wait_future(onErrorFuture));
+				continue;
+			}
+			int64_t committedVersion;
+			fdb_check(tr.get_committed_version(&committedVersion));
+			return committedVersion;
+		}
+	};
+
+	struct CopiedCdcMutation {
+		uint8_t type;
+		std::string param1;
+		std::string param2;
+	};
+	struct CopiedCdcReply {
+		int64_t version;
+		int64_t lastConsumedVersion;
+		std::vector<CopiedCdcMutation> mutations;
+	};
+
+	auto consumeThroughVersion = [&](FDBCdcConsumer* consumer, int64_t targetVersion) {
+		while (true) {
+			auto future = ownFuture(fdb_cdc_consumer_consume(consumer));
+			REQUIRE(future != nullptr);
+			waitForSuccess(future.get());
+
+			FDBCdcVersionedMutations const* groups = nullptr;
+			int groupCount = -1;
+			int64_t lastConsumedVersion = -1;
+			fdb_check(fdb_future_get_cdc_versioned_mutations(future.get(), &groups, &groupCount, &lastConsumedVersion));
+			CHECK(groupCount >= 0);
+
+			FDBCdcVersionedMutations const* targetGroup = nullptr;
+			for (int i = 0; i < groupCount; ++i) {
+				if (groups[i].version == targetVersion) {
+					targetGroup = &groups[i];
+					break;
+				}
+			}
+			if (targetGroup == nullptr && lastConsumedVersion < targetVersion) {
+				auto acknowledgeFuture = ownFuture(fdb_cdc_consumer_acknowledge(consumer));
+				REQUIRE(acknowledgeFuture != nullptr);
+				waitForSuccess(acknowledgeFuture.get());
+				continue;
+			}
+
+			REQUIRE(targetGroup != nullptr);
+			CopiedCdcReply result{ targetGroup->version, lastConsumedVersion, {} };
+			result.mutations.reserve(targetGroup->mutation_count);
+			for (int i = 0; i < targetGroup->mutation_count; ++i) {
+				auto const& mutation = targetGroup->mutations[i];
+				result.mutations.push_back(CopiedCdcMutation{
+				    mutation.type,
+				    std::string(reinterpret_cast<char const*>(mutation.param1), mutation.param1_length),
+				    std::string(reinterpret_cast<char const*>(mutation.param2), mutation.param2_length) });
+			}
+
+			fdb_future_release_memory(future.get());
+			CHECK(fdb_future_get_cdc_versioned_mutations(future.get(), &groups, &groupCount, &lastConsumedVersion) ==
+			      1102); // future_released
+			return result;
+		}
+	};
+
+	const std::string streamName = key("cdc-stream");
+	const std::string rangeBegin = key("cdc-data/");
+	const std::string rangeEnd = strinc_str(rangeBegin);
+	const std::string firstKey = rangeBegin + "first";
+	const std::string secondKey = rangeBegin + "second";
+	const std::string outsideKey = key("outside-cdc-range");
+	const std::string firstValue = "first-value";
+	const std::string secondValue = "second-value";
+
+	// Clear test data before registration so CDC sees only mutations below.
+	insert_data(db, std::map<std::string, std::string>{});
+
+	// CDC calls must retain their input bytes after the C function returns.
+	std::string nameInput = streamName;
+	std::string beginInput = rangeBegin;
+	std::string endInput = rangeEnd;
+	auto registerFuture =
+	    ownFuture(fdb_database_register_cdc_stream(db,
+	                                               reinterpret_cast<uint8_t const*>(nameInput.data()),
+	                                               nameInput.size(),
+	                                               reinterpret_cast<uint8_t const*>(beginInput.data()),
+	                                               beginInput.size(),
+	                                               reinterpret_cast<uint8_t const*>(endInput.data()),
+	                                               endInput.size()));
+	REQUIRE(registerFuture != nullptr);
+	std::fill(nameInput.begin(), nameInput.end(), 'x');
+	std::fill(beginInput.begin(), beginInput.end(), 'x');
+	std::fill(endInput.begin(), endInput.end(), 'x');
+	waitForSuccess(registerFuture.get());
+
+	uint64_t streamId = 0;
+	fdb_check(fdb_future_get_uint64(registerFuture.get(), &streamId));
+	REQUIRE(streamId != 0);
+
+	auto listFuture = ownFuture(fdb_database_list_cdc_streams(db));
+	REQUIRE(listFuture != nullptr);
+	waitForSuccess(listFuture.get());
+	FDBCdcStreamInfo const* streams = nullptr;
+	int streamCount = -1;
+	fdb_check(fdb_future_get_cdc_stream_info_array(listFuture.get(), &streams, &streamCount));
+	bool foundStream = false;
+	for (int i = 0; i < streamCount; ++i) {
+		if (extractString(streams[i].name) != streamName) {
+			continue;
+		}
+		foundStream = true;
+		CHECK(streams[i].stream_id == streamId);
+		CHECK(std::string(reinterpret_cast<char const*>(streams[i].key_range.begin_key),
+		                  streams[i].key_range.begin_key_length) == rangeBegin);
+		CHECK(std::string(reinterpret_cast<char const*>(streams[i].key_range.end_key),
+		                  streams[i].key_range.end_key_length) == rangeEnd);
+		CHECK(streams[i].min_version >= 0);
+	}
+	REQUIRE(foundStream);
+	fdb_future_release_memory(listFuture.get());
+	CHECK(fdb_future_get_cdc_stream_info_array(listFuture.get(), &streams, &streamCount) == 1102); // future_released
+
+	auto createFuture = ownFuture(
+	    fdb_database_create_cdc_consumer(db, reinterpret_cast<uint8_t const*>(streamName.data()), streamName.size()));
+	REQUIRE(createFuture != nullptr);
+	waitForSuccess(createFuture.get());
+	FDBCdcConsumer* rawConsumer = nullptr;
+	fdb_check(fdb_future_get_cdc_consumer(createFuture.get(), &rawConsumer));
+	auto consumer = ownConsumer(rawConsumer);
+	createFuture.reset();
+	REQUIRE(consumer != nullptr);
+
+	uint64_t positionStreamId = 0;
+	int64_t positionVersion = 0;
+	fdb_check(fdb_cdc_consumer_get_position(consumer.get(), &positionStreamId, &positionVersion));
+	CHECK(positionStreamId == streamId);
+	CHECK(positionVersion == -1);
+
+	const int64_t setVersion =
+	    commitSetValues({ { firstKey, firstValue }, { secondKey, secondValue }, { outsideKey, "outside-value" } });
+	auto setReply = consumeThroughVersion(consumer.get(), setVersion);
+	CHECK(setReply.version == setVersion);
+	CHECK(setReply.lastConsumedVersion >= setVersion);
+	REQUIRE(setReply.mutations.size() == 2);
+	std::map<std::string, std::string> expectedSets{ { firstKey, firstValue }, { secondKey, secondValue } };
+	for (auto const& mutation : setReply.mutations) {
+		CHECK(mutation.type == FDB_CDC_MUTATION_TYPE_SET_VALUE);
+		auto expected = expectedSets.find(mutation.param1);
+		REQUIRE(expected != expectedSets.end());
+		CHECK(mutation.param2 == expected->second);
+		expectedSets.erase(expected);
+	}
+	CHECK(expectedSets.empty());
+
+	auto acknowledgeFuture = ownFuture(fdb_cdc_consumer_acknowledge(consumer.get()));
+	REQUIRE(acknowledgeFuture != nullptr);
+	waitForSuccess(acknowledgeFuture.get());
+	fdb_check(fdb_cdc_consumer_get_position(consumer.get(), &positionStreamId, &positionVersion));
+	CHECK(positionStreamId == streamId);
+	CHECK(positionVersion == setReply.lastConsumedVersion);
+	consumer.reset();
+
+	auto resumeFuture = ownFuture(fdb_database_resume_cdc_consumer(db, positionStreamId, positionVersion));
+	REQUIRE(resumeFuture != nullptr);
+	waitForSuccess(resumeFuture.get());
+	FDBCdcConsumer* rawResumedConsumer = nullptr;
+	fdb_check(fdb_future_get_cdc_consumer(resumeFuture.get(), &rawResumedConsumer));
+	auto resumedConsumer = ownConsumer(rawResumedConsumer);
+	resumeFuture.reset();
+	REQUIRE(resumedConsumer != nullptr);
+	fdb_check(fdb_cdc_consumer_get_position(resumedConsumer.get(), &positionStreamId, &positionVersion));
+	CHECK(positionStreamId == streamId);
+	CHECK(positionVersion == setReply.lastConsumedVersion);
+
+	const std::string clearEnd = strinc_str(firstKey);
+	const int64_t clearVersion = commitClearRange(firstKey, clearEnd);
+	auto clearReply = consumeThroughVersion(resumedConsumer.get(), clearVersion);
+	CHECK(clearReply.version == clearVersion);
+	REQUIRE(clearReply.mutations.size() == 1);
+	CHECK(clearReply.mutations[0].type == FDB_CDC_MUTATION_TYPE_CLEAR_RANGE);
+	CHECK(clearReply.mutations[0].param1 == firstKey);
+	CHECK(clearReply.mutations[0].param2 == clearEnd);
+
+	auto resumedAcknowledgeFuture = ownFuture(fdb_cdc_consumer_acknowledge(resumedConsumer.get()));
+	REQUIRE(resumedAcknowledgeFuture != nullptr);
+	waitForSuccess(resumedAcknowledgeFuture.get());
+	resumedConsumer.reset();
+
+	auto removeFuture = ownFuture(
+	    fdb_database_remove_cdc_stream(db, reinterpret_cast<uint8_t const*>(streamName.data()), streamName.size()));
+	REQUIRE(removeFuture != nullptr);
+	waitForSuccess(removeFuture.get());
+
+	auto removedListFuture = ownFuture(fdb_database_list_cdc_streams(db));
+	REQUIRE(removedListFuture != nullptr);
+	waitForSuccess(removedListFuture.get());
+	streams = nullptr;
+	streamCount = -1;
+	fdb_check(fdb_future_get_cdc_stream_info_array(removedListFuture.get(), &streams, &streamCount));
+	for (int i = 0; i < streamCount; ++i) {
+		CHECK(extractString(streams[i].name) != streamName);
+	}
+}
+
 TEST_CASE("fdb_transaction_watch read_your_writes_disable") {
 	// Watches created on a transaction with the option READ_YOUR_WRITES_DISABLE
 	// should return a watches_disabled error.
@@ -2644,367 +2838,6 @@ TEST_CASE("Fast alloc thread cleanup") {
 			}
 		});
 		thread.join();
-	}
-}
-
-TEST_CASE("Tenant create, access, and delete") {
-	std::string tenantName = "tenant";
-	std::string testKey = "foo";
-	std::string testValue = "bar";
-
-	fdb::Transaction tr(db);
-	while (1) {
-		fdb_check(tr.set_option(FDB_TR_OPTION_SPECIAL_KEY_SPACE_ENABLE_WRITES, nullptr, 0));
-		tr.set("\xff\xff/management/tenant/map/" + tenantName, "");
-		fdb::EmptyFuture commitFuture = tr.commit();
-		fdb_error_t err = wait_future(commitFuture);
-		if (err) {
-			fdb::EmptyFuture f = tr.on_error(err);
-			fdb_check(wait_future(f));
-			continue;
-		}
-		tr.reset();
-		break;
-	}
-
-	while (1) {
-		StringRef begin = "\xff\xff/management/tenant/map/"_sr;
-		StringRef end = "\xff\xff/management/tenant/map0"_sr;
-
-		fdb_check(tr.set_option(FDB_TR_OPTION_SPECIAL_KEY_SPACE_ENABLE_WRITES, nullptr, 0));
-		fdb::KeyValueArrayFuture f = tr.get_range(FDB_KEYSEL_FIRST_GREATER_OR_EQUAL(begin.begin(), begin.size()),
-		                                          FDB_KEYSEL_FIRST_GREATER_OR_EQUAL(end.begin(), end.size()),
-		                                          /* limit */ 0,
-		                                          /* target_bytes */ 0,
-		                                          /* FDBStreamingMode */ FDB_STREAMING_MODE_WANT_ALL,
-		                                          /* iteration */ 0,
-		                                          /* snapshot */ false,
-		                                          /* reverse */ 0);
-
-		fdb_error_t err = wait_future(f);
-		if (err) {
-			fdb::EmptyFuture f2 = tr.on_error(err);
-			fdb_check(wait_future(f2));
-			continue;
-		}
-
-		FDBKeyValue const* outKv;
-		int outCount;
-		int outMore;
-		fdb_check(f.get(&outKv, &outCount, &outMore));
-		CHECK(outCount == 1);
-		CHECK(StringRef(outKv->key, outKv->key_length) == StringRef(tenantName).withPrefix(begin));
-
-		tr.reset();
-		break;
-	}
-
-	fdb::Tenant tenant(db, reinterpret_cast<const uint8_t*>(tenantName.c_str()), tenantName.size());
-	fdb::Transaction tr2(tenant);
-
-	while (1) {
-		tr2.set(testKey, testValue);
-		fdb::EmptyFuture commitFuture = tr2.commit();
-		fdb_error_t err = wait_future(commitFuture);
-		if (err) {
-			fdb::EmptyFuture f = tr2.on_error(err);
-			fdb_check(wait_future(f));
-			continue;
-		}
-		tr2.reset();
-		break;
-	}
-
-	while (1) {
-		fdb::ValueFuture f1 = tr2.get(testKey, false);
-		fdb_error_t err = wait_future(f1);
-		if (err) {
-			fdb::EmptyFuture f2 = tr.on_error(err);
-			fdb_check(wait_future(f2));
-			continue;
-		}
-
-		int out_present;
-		char* val;
-		int vallen;
-		fdb_check(f1.get(&out_present, (const uint8_t**)&val, &vallen));
-		CHECK(out_present == 1);
-		CHECK(vallen == testValue.size());
-		CHECK(testValue == val);
-
-		tr2.clear(testKey);
-		fdb::EmptyFuture commitFuture = tr2.commit();
-		err = wait_future(commitFuture);
-		if (err) {
-			fdb::EmptyFuture f = tr2.on_error(err);
-			fdb_check(wait_future(f));
-			continue;
-		}
-
-		tr2.reset();
-		break;
-	}
-
-	while (1) {
-		fdb_check(tr.set_option(FDB_TR_OPTION_SPECIAL_KEY_SPACE_ENABLE_WRITES, nullptr, 0));
-		tr.clear("\xff\xff/management/tenant/map/" + tenantName);
-		fdb::EmptyFuture commitFuture = tr.commit();
-		fdb_error_t err = wait_future(commitFuture);
-		if (err) {
-			fdb::EmptyFuture f = tr.on_error(err);
-			fdb_check(wait_future(f));
-			continue;
-		}
-		tr.reset();
-		break;
-	}
-
-	while (1) {
-		fdb::ValueFuture f1 = tr2.get(testKey, false);
-		fdb_error_t err = wait_future(f1);
-		if (err == error_code_tenant_not_found) {
-			tr2.reset();
-			break;
-		}
-		if (err) {
-			fdb::EmptyFuture f2 = tr.on_error(err);
-			fdb_check(wait_future(f2));
-			continue;
-		}
-	}
-}
-
-int64_t granule_start_load_fail(const char* filename,
-                                int filenameLength,
-                                int64_t offset,
-                                int64_t length,
-                                int64_t fullFileLength,
-                                void* userContext) {
-	CHECK(false);
-	return -1;
-}
-
-uint8_t* granule_get_load_fail(int64_t loadId, void* userContext) {
-	CHECK(false);
-	return nullptr;
-}
-
-void granule_free_load_fail(int64_t loadId, void* userContext) {
-	CHECK(false);
-}
-
-TEST_CASE("Blob Granule Functions") {
-	auto confValue =
-	    get_value("\xff/conf/blob_granules_enabled", /* snapshot */ false, { FDB_TR_OPTION_READ_SYSTEM_KEYS });
-	if (!confValue.has_value() || confValue.value() != "1") {
-		// std::cout << "skipping blob granule test" << std::endl;
-		return;
-	}
-
-	// write some data
-	insert_data(db, create_data({ { "bg1", "a" }, { "bg2", "b" }, { "bg3", "c" } }));
-
-	// because wiring up files is non-trivial, just test the calls complete with the expected no_materialize error
-	FDBReadBlobGranuleContext granuleContext;
-	granuleContext.userContext = nullptr;
-	granuleContext.start_load_f = &granule_start_load_fail;
-	granuleContext.get_load_f = &granule_get_load_fail;
-	granuleContext.free_load_f = &granule_free_load_fail;
-	granuleContext.debugNoMaterialize = true;
-	granuleContext.granuleParallelism = 1;
-
-	// dummy values
-	FDBKeyValue const* out_kv;
-	int out_count;
-	int out_more;
-
-	fdb::Transaction tr(db);
-	int64_t originalReadVersion = -1;
-
-	// test no materialize gets error but completes, save read version
-	while (1) {
-		fdb_check(tr.set_option(FDB_TR_OPTION_READ_YOUR_WRITES_DISABLE, nullptr, 0));
-		// -2 is latest version
-		fdb::KeyValueArrayResult r = tr.read_blob_granules(key("bg"), key("bh"), 0, -2, granuleContext);
-		fdb_error_t err = r.get(&out_kv, &out_count, &out_more);
-		if (err && err != 2037 /* blob_granule_not_materialized */) {
-			fdb::EmptyFuture f2 = tr.on_error(err);
-			fdb_check(wait_future(f2));
-			continue;
-		}
-
-		CHECK(err == 2037 /* blob_granule_not_materialized */);
-
-		// If read done, save read version. Should have already used read version so this shouldn't error
-		fdb::Int64Future grvFuture = tr.get_read_version();
-		fdb_error_t grvErr = wait_future(grvFuture);
-		CHECK(!grvErr);
-		CHECK(!grvFuture.get(&originalReadVersion));
-
-		CHECK(originalReadVersion > 0);
-
-		tr.reset();
-		break;
-	}
-
-	// test with begin version > 0
-	while (1) {
-		fdb_check(tr.set_option(FDB_TR_OPTION_READ_YOUR_WRITES_DISABLE, nullptr, 0));
-		// -2 is latest version, read version should be >= originalReadVersion
-		fdb::KeyValueArrayResult r =
-		    tr.read_blob_granules(key("bg"), key("bh"), originalReadVersion, -2, granuleContext);
-		fdb_error_t err = r.get(&out_kv, &out_count, &out_more);
-		if (err && err != 2037 /* blob_granule_not_materialized */) {
-			fdb::EmptyFuture f2 = tr.on_error(err);
-			fdb_check(wait_future(f2));
-			continue;
-		}
-
-		CHECK(err == 2037 /* blob_granule_not_materialized */);
-
-		tr.reset();
-		break;
-	}
-
-	// test with prior read version completes after delay larger than normal MVC window
-	// TODO: should we not do this?
-	std::this_thread::sleep_for(std::chrono::milliseconds(6000));
-	while (1) {
-		fdb_check(tr.set_option(FDB_TR_OPTION_READ_YOUR_WRITES_DISABLE, nullptr, 0));
-		fdb::KeyValueArrayResult r =
-		    tr.read_blob_granules(key("bg"), key("bh"), 0, originalReadVersion, granuleContext);
-		fdb_error_t err = r.get(&out_kv, &out_count, &out_more);
-		if (err && err != 2037 /* blob_granule_not_materialized */) {
-			fdb::EmptyFuture f2 = tr.on_error(err);
-			fdb_check(wait_future(f2));
-			continue;
-		}
-
-		CHECK(err == 2037 /* blob_granule_not_materialized */);
-
-		tr.reset();
-		break;
-	}
-
-	// test ranges
-
-	while (1) {
-		fdb::KeyRangeArrayFuture f = tr.get_blob_granule_ranges(key("bg"), key("bh"), 1000);
-		fdb_error_t err = wait_future(f);
-		if (err) {
-			fdb::EmptyFuture f2 = tr.on_error(err);
-			fdb_check(wait_future(f2));
-			continue;
-		}
-
-		const FDBKeyRange* out_kr;
-		int out_count;
-		fdb_check(f.get(&out_kr, &out_count));
-
-		CHECK(std::string((const char*)out_kr[0].begin_key, out_kr[0].begin_key_length) <= key("bg"));
-		CHECK(std::string((const char*)out_kr[out_count - 1].end_key, out_kr[out_count - 1].end_key_length) >=
-		      key("bh"));
-
-		CHECK(out_count >= 1);
-		// check key ranges are in order
-		for (int i = 0; i < out_count; i++) {
-			// key range start < end
-			CHECK(std::string((const char*)out_kr[i].begin_key, out_kr[i].begin_key_length) <
-			      std::string((const char*)out_kr[i].end_key, out_kr[i].end_key_length));
-		}
-		// Ranges themselves are sorted and contiguous
-		for (int i = 0; i < out_count - 1; i++) {
-			CHECK(std::string((const char*)out_kr[i].end_key, out_kr[i].end_key_length) ==
-			      std::string((const char*)out_kr[i + 1].begin_key, out_kr[i + 1].begin_key_length));
-		}
-
-		tr.reset();
-		break;
-	}
-
-	// do a purge + wait at that version to purge everything before originalReadVersion
-
-	fdb::KeyFuture purgeKeyFuture =
-	    fdb::Database::purge_blob_granules(db, key("bg"), key("bh"), originalReadVersion, false);
-
-	fdb_check(wait_future(purgeKeyFuture));
-
-	const uint8_t* purgeKeyData;
-	int purgeKeyLen;
-
-	fdb_check(purgeKeyFuture.get(&purgeKeyData, &purgeKeyLen));
-
-	std::string purgeKey((const char*)purgeKeyData, purgeKeyLen);
-
-	fdb::EmptyFuture waitPurgeFuture = fdb::Database::wait_purge_granules_complete(db, purgeKey);
-	fdb_check(wait_future(waitPurgeFuture));
-
-	// re-read again at the purge version to make sure it is still valid
-	while (1) {
-		fdb_check(tr.set_option(FDB_TR_OPTION_READ_YOUR_WRITES_DISABLE, nullptr, 0));
-		fdb::KeyValueArrayResult r =
-		    tr.read_blob_granules(key("bg"), key("bh"), 0, originalReadVersion, granuleContext);
-		fdb_error_t err = r.get(&out_kv, &out_count, &out_more);
-		if (err && err != 2037 /* blob_granule_not_materialized */) {
-			fdb::EmptyFuture f2 = tr.on_error(err);
-			fdb_check(wait_future(f2));
-			continue;
-		}
-
-		CHECK(err == 2037 /* blob_granule_not_materialized */);
-
-		tr.reset();
-		break;
-	}
-
-	// check granule summary
-	while (1) {
-		fdb::GranuleSummaryArrayFuture f = tr.summarize_blob_granules(key("bg"), key("bh"), originalReadVersion, 100);
-		fdb_error_t err = wait_future(f);
-		if (err) {
-			fdb::EmptyFuture f2 = tr.on_error(err);
-			fdb_check(wait_future(f2));
-			continue;
-		}
-
-		const FDBGranuleSummary* out_summaries;
-		int out_count;
-		fdb_check(f.get(&out_summaries, &out_count));
-
-		CHECK(out_count >= 1);
-		CHECK(out_count <= 100);
-
-		// check that ranges cover requested range
-		CHECK(std::string((const char*)out_summaries[0].key_range.begin_key,
-		                  out_summaries[0].key_range.begin_key_length) <= key("bg"));
-		CHECK(std::string((const char*)out_summaries[out_count - 1].key_range.end_key,
-		                  out_summaries[out_count - 1].key_range.end_key_length) >= key("bh"));
-
-		// check key ranges are in order
-		for (int i = 0; i < out_count; i++) {
-			// key range start < end
-			CHECK(std::string((const char*)out_summaries[i].key_range.begin_key,
-			                  out_summaries[i].key_range.begin_key_length) <
-			      std::string((const char*)out_summaries[i].key_range.end_key,
-			                  out_summaries[i].key_range.end_key_length));
-			// sanity check versions and sizes
-			CHECK(out_summaries[i].snapshot_version <= originalReadVersion);
-			CHECK(out_summaries[i].delta_version <= originalReadVersion);
-			CHECK(out_summaries[i].snapshot_version <= out_summaries[i].delta_version);
-			CHECK(out_summaries[i].snapshot_size > 0);
-			CHECK(out_summaries[i].delta_size >= 0);
-		}
-
-		// Ranges themselves are sorted and contiguous
-		for (int i = 0; i < out_count - 1; i++) {
-			CHECK(std::string((const char*)out_summaries[i].key_range.end_key,
-			                  out_summaries[i].key_range.end_key_length) ==
-			      std::string((const char*)out_summaries[i + 1].key_range.begin_key,
-			                  out_summaries[i + 1].key_range.begin_key_length));
-		}
-
-		tr.reset();
-		break;
 	}
 }
 

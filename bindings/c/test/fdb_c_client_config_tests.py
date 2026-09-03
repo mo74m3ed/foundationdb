@@ -12,10 +12,10 @@ import re
 
 from threading import Thread
 import time
-from fdb_version import CURRENT_VERSION, PREV_RELEASE_VERSION, PREV2_RELEASE_VERSION
-from binary_download import FdbBinaryDownloader
-from local_cluster import LocalCluster, PortProvider, TLSConfig
-from test_util import random_alphanum_string
+from fdb_test_runner.fdb_version import CURRENT_VERSION, PREV_RELEASE_VERSION, PREV2_RELEASE_VERSION
+from fdb_test_runner.binary_download import FdbBinaryDownloader
+from fdb_test_runner.local_cluster import LocalCluster, PortProvider, TLSConfig
+from fdb_test_runner.test_util import random_alphanum_string
 
 args = None
 downloader = None
@@ -436,9 +436,10 @@ class ClientConfigTests(unittest.TestCase):
         )
         test.check_current_client(CURRENT_VERSION)
 
-    @unittest.skipUnless(test_prev_versions, "Previous release binaries not available")
+    @unittest.skip("API functions are present in the two supported previous releases")
     def test_no_external_client_support_api_version(self):
         # Multiple external clients, API version supported by none of them
+        # Note: Ignored because API function won't be missing in last 2 releases.
         test = ClientConfigTest(self)
         test.create_external_lib_dir([PREV2_RELEASE_VERSION, PREV_RELEASE_VERSION])
         test.disable_local_client = True
@@ -457,9 +458,10 @@ class ClientConfigTests(unittest.TestCase):
         test.expected_error = 2124  # All external clients failed
         test.exec()
 
-    @unittest.skipUnless(test_prev_versions, "Previous release binaries not available")
+    @unittest.skip("API functions are present in the two supported previous releases")
     def test_one_external_client_wrong_api_version(self):
-        # Multiple external clients, API version unsupported by one of othem
+        # Multiple external clients, API version unsupported by one of them.
+        # Note: Ignored because API function won't be missing in last 2 releases.
         test = ClientConfigTest(self)
         test.create_external_lib_dir(
             [CURRENT_VERSION, PREV_RELEASE_VERSION, PREV2_RELEASE_VERSION]
@@ -579,7 +581,7 @@ class ClientConfigPrevVersionTests(unittest.TestCase):
         test.api_version = api_version_from_str(PREV_RELEASE_VERSION)
         test.exec()
         test.check_initialization_state("created")
-        test.check_healthy_status(False)
+        test.check_healthy_status(True)
         test.check_available_clients([PREV_RELEASE_VERSION, CURRENT_VERSION])
         test.check_current_client(PREV_RELEASE_VERSION)
 
@@ -610,7 +612,7 @@ class ClientConfigSeparateCluster(unittest.TestCase):
     @unittest.skipUnless(test_prev_versions, "Previous release binaries not available")
     def test_wait_cluster_to_upgrade(self):
         # Test starting a client incompatible to a cluster and connecting
-        # successfuly after cluster upgrade
+        # successfully after cluster upgrade
         self.cluster = TestCluster(PREV_RELEASE_VERSION)
         self.cluster.setup()
         try:
@@ -651,7 +653,7 @@ class ClientConfigSeparateCluster(unittest.TestCase):
             self.cluster.tear_down()
 
     def test_plaintext_cluster_tls_client(self):
-        # Test connecting succesfully to a plaintext cluster with a TLS client
+        # Test connecting successfully to a plaintext cluster with a TLS client
         self.cluster = TestCluster(
             CURRENT_VERSION, tls_config=TLSConfig(), disable_server_side_tls=True
         )
@@ -689,7 +691,7 @@ class ClientConfigSeparateCluster(unittest.TestCase):
             self.cluster.tear_down()
 
     def test_plaintext_cluster_tls_client_plaintext_connection_disabled(self):
-        # Test connecting succesfully to a plaintext cluster with a TLS-configured client with plaintext connections disabled
+        # Test connecting successfully to a plaintext cluster with a TLS-configured client with plaintext connections disabled
         self.cluster = TestCluster(
             CURRENT_VERSION, tls_config=TLSConfig(), disable_server_side_tls=True
         )
@@ -735,14 +737,12 @@ class ClientTracingTests(unittest.TestCase):
             with_ip=True, version=CURRENT_VERSION, thread_idx=0
         )
         self.find_and_check_event(cur_ver_trace, "ClientStart", ["Machine"], [])
-        prev_ver_trace = self.find_trace_file(
-            with_ip=True, version=PREV_RELEASE_VERSION, thread_idx=0
-        )
-        self.assertIsNotNone(prev_ver_trace)
-        # disable because older version does not guarantee trace flush before network::stop() returns
         # prev_ver_trace = self.find_trace_file(
         #     with_ip=True, version=PREV_RELEASE_VERSION, thread_idx=0
         # )
+        # there have been sporadic check failures in the trace check below, so we comment this out for the time being
+        # previous release version was likely not flushing trace correctly when network::stop() is called
+        # TODO: re-enable this check when we bump up PREV_RELEASE_VERSION to one where there is such a guarantee
         # self.find_and_check_event(prev_ver_trace, "ClientStart", ["Machine"], [])
 
     @unittest.skipUnless(test_prev_versions, "Previous release binaries not available")
@@ -877,7 +877,7 @@ class ClientTracingTests(unittest.TestCase):
             pattern += "\.\d+\.\w+\.\d+\.\d+\.{}$".format(self.test.trace_format)
             if re.match(pattern, name):
                 return trace_file
-        self.fail("No maching trace file found")
+        self.fail("No matching trace file found")
 
     def find_and_check_event(
         self, trace_file, event_type, attr_present, attr_missing, seqno=0

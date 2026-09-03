@@ -1,5 +1,6 @@
 [configuration]
 extraDatabaseMode = "Local"
+storageEngineExcludeTypes=[4,5]
 
 [[test]]
 testTitle = "DrUpgrade"
@@ -13,7 +14,6 @@ waitForQuiescenceBegin = false
     nodeCount = 30000
     transactionsPerSecond = 1000.0
     testDuration = 30.0
-    expectedRate = 0
 
     [[test.workload]]
     testName = "BackupToDBUpgrade"

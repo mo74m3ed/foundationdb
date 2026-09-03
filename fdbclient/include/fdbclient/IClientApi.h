@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,21 +22,20 @@
 #define FDBCLIENT_ICLIENTAPI_H
 #pragma once
 
-#include "fdbclient/BlobGranuleCommon.h"
 #include "fdbclient/FDBOptions.g.h"
 #include "fdbclient/FDBTypes.h"
-#include "fdbclient/Tenant.h"
+#include "fdbclient/NativeCdcClient.h"
 #include "fdbclient/Tracing.h"
 #include "fdbclient/ApiRequest.h"
 #include "flow/ProtocolVersion.h"
-#include "flow/ThreadHelper.actor.h"
+#include "flow/ThreadHelper.h"
 
 struct VersionVector;
 
 // An interface that represents a transaction created by a client
 class ITransaction {
 public:
-	virtual ~ITransaction() {}
+	virtual ~ITransaction() = default;
 
 	virtual void cancel() = 0;
 	virtual void setVersion(Version v) = 0;
@@ -69,7 +68,6 @@ public:
 	                                                       const KeySelectorRef& end,
 	                                                       const StringRef& mapper,
 	                                                       GetRangeLimits limits,
-	                                                       int matchIndex = MATCH_INDEX_ALL,
 	                                                       bool snapshot = false,
 	                                                       bool reverse = false) = 0;
 	virtual ThreadFuture<Standalone<VectorRef<const char*>>> getAddressesForKey(const KeyRef& key) = 0;
@@ -78,13 +76,8 @@ public:
 	virtual void addReadConflictRange(const KeyRangeRef& keys) = 0;
 	virtual ThreadFuture<int64_t> getEstimatedRangeSizeBytes(const KeyRangeRef& keys) = 0;
 	virtual ThreadFuture<Standalone<VectorRef<KeyRef>>> getRangeSplitPoints(const KeyRangeRef& range,
-	                                                                        int64_t chunkSize) = 0;
-
-	virtual ThreadFuture<Standalone<VectorRef<KeyRangeRef>>> getBlobGranuleRanges(const KeyRangeRef& keyRange,
-	                                                                              int rowLimit) = 0;
-
-	virtual ThreadFuture<Standalone<VectorRef<BlobGranuleSummaryRef>>>
-	summarizeBlobGranules(const KeyRangeRef& keyRange, Optional<Version> summaryVersion, int rangeLimit) = 0;
+	                                                                        int64_t chunkSize,
+	                                                                        int limit = -1) = 0;
 
 	virtual void atomicOp(const KeyRef& key, const ValueRef& value, uint32_t operationType) = 0;
 	virtual void set(const KeyRef& key, const ValueRef& value) = 0;
@@ -123,42 +116,20 @@ public:
 	// it will return false
 	virtual bool isValid() { return true; }
 
-	virtual Optional<TenantName> getTenant() = 0;
+	virtual void debugTrace(BaseTraceEvent&& event) = 0;
+	virtual void debugPrint(std::string const& message) = 0;
 
-	virtual ThreadFuture<ApiResult> execAsyncRequest(ApiRequest request) = 0;
-
-	virtual FDBAllocatorIfc* getAllocatorInterface() = 0;
-};
-
-class ITenant {
-public:
-	virtual ~ITenant() {}
-
-	virtual Reference<ITransaction> createTransaction() = 0;
-
-	virtual ThreadFuture<int64_t> getId() = 0;
-	virtual ThreadFuture<Key> purgeBlobGranules(const KeyRangeRef& keyRange, Version purgeVersion, bool force) = 0;
-	virtual ThreadFuture<Void> waitPurgeGranulesComplete(const KeyRef& purgeKey) = 0;
-
-	virtual ThreadFuture<bool> blobbifyRange(const KeyRangeRef& keyRange) = 0;
-	virtual ThreadFuture<bool> blobbifyRangeBlocking(const KeyRangeRef& keyRange) = 0;
-	virtual ThreadFuture<bool> unblobbifyRange(const KeyRangeRef& keyRange) = 0;
-	virtual ThreadFuture<Standalone<VectorRef<KeyRangeRef>>> listBlobbifiedRanges(const KeyRangeRef& keyRange,
-	                                                                              int rangeLimit) = 0;
-
-	virtual ThreadFuture<Version> verifyBlobRange(const KeyRangeRef& keyRange, Optional<Version> version) = 0;
-	virtual ThreadFuture<bool> flushBlobRange(const KeyRangeRef& keyRange, bool compact, Optional<Version> version) = 0;
-
-	virtual void addref() = 0;
-	virtual void delref() = 0;
+	template <class... Args>
+	void debugFmtPrint(std::string const& message, Args&&... args) {
+		debugPrint(fmt::format(fmt::runtime(message), std::forward<Args>(args)...));
+	};
 };
 
 // An interface that represents a connection to a cluster made by a client
 class IDatabase {
 public:
-	virtual ~IDatabase() {}
+	virtual ~IDatabase() = default;
 
-	virtual Reference<ITenant> openTenant(TenantNameRef tenantName) = 0;
 	virtual Reference<ITransaction> createTransaction() = 0;
 	virtual void setOption(FDBDatabaseOptions::Option option, Optional<StringRef> value = Optional<StringRef>()) = 0;
 	virtual double getMainThreadBusyness() = 0;
@@ -184,19 +155,14 @@ public:
 	// Management API, create snapshot
 	virtual ThreadFuture<Void> createSnapshot(const StringRef& uid, const StringRef& snapshot_command) = 0;
 
-	// purge blob granules api. purgeBlobGranules is asynchronus, calling waitPurgeGranulesComplete after guarantees
-	// completion.
-	virtual ThreadFuture<Key> purgeBlobGranules(const KeyRangeRef& keyRange, Version purgeVersion, bool force) = 0;
-	virtual ThreadFuture<Void> waitPurgeGranulesComplete(const KeyRef& purgeKey) = 0;
-
-	virtual ThreadFuture<bool> blobbifyRange(const KeyRangeRef& keyRange) = 0;
-	virtual ThreadFuture<bool> blobbifyRangeBlocking(const KeyRangeRef& keyRange) = 0;
-	virtual ThreadFuture<bool> unblobbifyRange(const KeyRangeRef& keyRange) = 0;
-	virtual ThreadFuture<Standalone<VectorRef<KeyRangeRef>>> listBlobbifiedRanges(const KeyRangeRef& keyRange,
-	                                                                              int rangeLimit) = 0;
-
-	virtual ThreadFuture<Version> verifyBlobRange(const KeyRangeRef& keyRange, Optional<Version> version) = 0;
-	virtual ThreadFuture<bool> flushBlobRange(const KeyRangeRef& keyRange, bool compact, Optional<Version> version) = 0;
+	// Native CDC operations. These values are intentionally independent from
+	// NativeAPI so multi-version client wrappers can forward them without
+	// depending on the native client implementation.
+	virtual ThreadFuture<CDCStreamId> registerNativeCdcStream(const KeyRef& name, const KeyRangeRef& keys) = 0;
+	virtual ThreadFuture<Void> removeNativeCdcStream(const KeyRef& name) = 0;
+	virtual ThreadFuture<std::vector<NativeCdcStreamInfo>> listNativeCdcStreams() = 0;
+	virtual ThreadFuture<Reference<INativeCdcConsumer>> createNativeCdcConsumer(const KeyRef& name) = 0;
+	virtual ThreadFuture<Reference<INativeCdcConsumer>> resumeNativeCdcConsumer(const NativeCdcCursor& cursor) = 0;
 
 	// Interface to manage shared state across multiple connections to the same Database
 	virtual ThreadFuture<DatabaseSharedState*> createSharedState() = 0;
@@ -215,7 +181,7 @@ public:
 // operations use ThreadFutures and implementations should be thread safe.
 class IClientApi {
 public:
-	virtual ~IClientApi() {}
+	virtual ~IClientApi() = default;
 
 	virtual void selectApiVersion(int apiVersion) = 0;
 	virtual const char* getClientVersion() = 0;

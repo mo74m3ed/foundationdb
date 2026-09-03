@@ -5,7 +5,7 @@
 #
 # This source file is part of the FoundationDB open source project
 #
-# Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+# Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,8 +36,8 @@ module FDB
   module FDBC
     require 'rbconfig'
 
-    if RbConfig::CONFIG['host_cpu'] != "x86_64"
-      raise LoadError, "FoundationDB API only supported on x86_64 (not #{RbConfig::CONFIG['host_cpu']})"
+    unless ["x86_64", "arm64"].include? RbConfig::CONFIG['host_cpu']
+      raise LoadError, "FoundationDB API only supported on x86_64 and arm64 (not #{RbConfig::CONFIG['host_cpu']})"
     end
 
     case RbConfig::CONFIG['host_os']
@@ -89,6 +89,7 @@ module FDB
       attach_function :fdb_future_get_key, [ :pointer, :pointer, :pointer ], :fdb_error
       attach_function :fdb_future_get_value, [ :pointer, :pointer, :pointer, :pointer ], :fdb_error
       attach_function :fdb_future_get_keyvalue_array, [ :pointer, :pointer, :pointer, :pointer ], :fdb_error
+      attach_function :fdb_future_get_key_array, [ :pointer, :pointer, :pointer ], :fdb_error
       attach_function :fdb_future_get_string_array, [ :pointer, :pointer, :pointer ], :fdb_error
 
       attach_function :fdb_create_database, [ :string, :pointer ], :fdb_error
@@ -485,7 +486,7 @@ module FDB
 
       ks = FFI::MemoryPointer.new :pointer
       count = FFI::MemoryPointer.new :int
-      FDBC.check_error FDBC.fdb_future_get_key_array(@fpointer, kvs, count)
+      FDBC.check_error FDBC.fdb_future_get_key_array(@fpointer, ks, count)
       ks = ks.read_pointer
 
       (0..count.read_int-1).map{|i|

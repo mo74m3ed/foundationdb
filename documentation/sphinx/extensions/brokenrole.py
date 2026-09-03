@@ -3,7 +3,7 @@
 #
 # This source file is part of the FoundationDB open source project
 #
-# Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+# Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,7 +23,9 @@ def setup(app):
     app.add_role("broken", broken_role)
 
 
-def broken_role(name, rawtext, text, lineno, inliner, options={}, content=[]):
+def broken_role(name, rawtext, text, lineno, inliner, options=None, content=None):
+    options = options or {}
+    content = content or []
     msg = inliner.reporter.error("Broken role invoked", line=lineno)
     prb = inliner.problematic(rawtext, rawtext, msg)
     return [prb], [msg]

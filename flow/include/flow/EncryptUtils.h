@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,6 +31,9 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+
+// TODO(gglass): figure out how much of this stuff is needed now that encryption
+// at rest is deleted.  For now leave it is as it's not that much code.
 
 #define DEBUG_ENCRYPT_KEY_CIPHER false
 
@@ -67,11 +70,11 @@ static const std::unordered_set<EncryptCipherDomainId> ENCRYPT_CIPHER_DETAULT_DO
 	FDB_DEFAULT_ENCRYPT_DOMAIN_ID,
 };
 
-typedef enum {
+enum EncryptCipherMode {
 	ENCRYPT_CIPHER_MODE_NONE = 0,
 	ENCRYPT_CIPHER_MODE_AES_256_CTR = 1,
 	ENCRYPT_CIPHER_MODE_LAST = 2
-} EncryptCipherMode;
+};
 
 static_assert(EncryptCipherMode::ENCRYPT_CIPHER_MODE_LAST <= std::numeric_limits<uint8_t>::max(),
               "EncryptCipherMode value overflow");
@@ -85,21 +88,21 @@ EncryptCipherMode encryptModeFromString(const std::string& modeStr);
 // 'tempering' and/or bit rot/flip corruptions. Refer to BlobCipher.h for detailed usage recommendations.
 // 3. LAST - Invalid mode, used for static asserts.
 
-typedef enum {
+enum EncryptAuthTokenMode {
 	ENCRYPT_HEADER_AUTH_TOKEN_MODE_NONE = 0,
 	ENCRYPT_HEADER_AUTH_TOKEN_MODE_SINGLE = 1,
 	ENCRYPT_HEADER_AUTH_TOKEN_LAST = 3 // Always the last element
-} EncryptAuthTokenMode;
+};
 
 static_assert(EncryptAuthTokenMode::ENCRYPT_HEADER_AUTH_TOKEN_LAST <= std::numeric_limits<uint8_t>::max(),
               "EncryptHeaderAuthToken value overflow");
 
-typedef enum {
+enum EncryptAuthTokenAlgo {
 	ENCRYPT_HEADER_AUTH_TOKEN_ALGO_NONE = 0,
 	ENCRYPT_HEADER_AUTH_TOKEN_ALGO_HMAC_SHA = 1,
 	ENCRYPT_HEADER_AUTH_TOKEN_ALGO_AES_CMAC = 2,
 	ENCRYPT_HEADER_AUTH_TOKEN_ALGO_LAST = 3 // Always the last element
-} EncryptAuthTokenAlgo;
+};
 
 static_assert(EncryptAuthTokenAlgo::ENCRYPT_HEADER_AUTH_TOKEN_ALGO_LAST <= std::numeric_limits<uint8_t>::max(),
               "EncryptHeaerAuthTokenAlgo value overflow");

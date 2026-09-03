@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -95,19 +95,6 @@ KeyRangeArray copyKeyRangeArray(fdb::future_var::KeyRangeRefArray::Type array) {
 		range.beginKey = fdb::Key(nativeKr.begin_key, nativeKr.begin_key_length);
 		range.endKey = fdb::Key(nativeKr.end_key, nativeKr.end_key_length);
 		out.push_back(range);
-	}
-	return out;
-};
-
-GranuleSummaryArray copyGranuleSummaryArray(fdb::future_var::GranuleSummaryRefArray::Type array) {
-	auto& [in_summaries, in_count] = array;
-
-	GranuleSummaryArray out;
-
-	for (int i = 0; i < in_count; ++i) {
-		fdb::native::FDBGranuleSummary nativeSummary = *in_summaries++;
-		fdb::GranuleSummary summary(nativeSummary);
-		out.push_back(summary);
 	}
 	return out;
 };

@@ -5,7 +5,7 @@
     must be installed. If you upgrade a language binding to a new version, you may need to upgrade the FoundationDB client binaries as well. See :ref:`installing-client-binaries`.
 
 .. |project-dependency| replace::
-    If you have a project with automatic dependency installation and have expressed a dependency on foundationdb, it may automatically install the lastest version of the language binding when you deploy your project to a new machine. If you have not also upgraded the Foundation client binary, an unplanned upgrade of the language binding may encounter an incompatibility. You should therefore configure any project dependency on foundationdb in coordination with your overall upgrade strategy.
+    If you have a project with automatic dependency installation and have expressed a dependency on foundationdb, it may automatically install the latest version of the language binding when you deploy your project to a new machine. If you have not also upgraded the Foundation client binary, an unplanned upgrade of the language binding may encounter an incompatibility. You should therefore configure any project dependency on foundationdb in coordination with your overall upgrade strategy.
 
 .. |client-installed-bindings| replace::
     The language binding requires FoundationDB client binaries whose version is at least as recent. The binding installed with FoundationDB installation will automatically satisfy this requirement.
@@ -73,9 +73,6 @@
 
 .. |database-sync| replace::
     The convenience methods provided by |database-type| have the same signature as the corresponding methods of ``Transaction``. However, most of the |database-type| methods are fully synchronous. (An exception is the methods for watches.) As a result, the |database-type| methods do not support the use of :ref:`implicit parallelism with futures <developer-guide-programming-with-futures>`.
-
-.. |tenant-blurb1| replace::
-    |tenant-type| represents a FoundationDB tenant. Tenants are optional named transaction domains that can be used to provide multiple disjoint key-spaces to client applications. A transaction created in a tenant will be limited to the keys contained within that tenant, and transactions operating on different tenants can use the same key names without interfering with each other.
 
 .. |keysel-blurb1| replace::
     FoundationDB's lexicographically ordered data model permits finding keys based on their order (for example, finding the first key in the database greater than a given key). Key selectors represent a description of a key in the database that could be resolved to an actual key by |get-key-func| or used directly as the beginning or end of a range in |get-range-func|.
@@ -151,7 +148,7 @@
 .. |atomic-versionstamps-tuple-warning-value| replace::
     At this time, versionstamped values are not compatible with the Tuple layer except in Java, Python, and Go. Note that this implies versionstamped values may not be used with the Subspace and Directory layers except in those languages.
 
-.. |api-version| replace:: 710300
+.. |api-version| replace:: 800
 
 .. |streaming-mode-blurb1| replace::
     When using |get-range-func| and similar interfaces, API clients can request large ranges of the database to iterate over.  Making such a request doesn't necessarily mean that the client will consume all of the data in the range - sometimes the client doesn't know how far it intends to iterate in advance.  FoundationDB tries to balance latency and bandwidth by requesting data for iteration in batches.
@@ -381,7 +378,7 @@
 
 .. |option-read-your-writes-disable-blurb| replace::
 
-    When this option is invoked, a read performed by a transaction will not see any prior mutations that occured in that transaction, instead seeing the value which was in the database at the transaction's read version. This option may provide a small performance benefit for the client, but also disables a number of client-side optimizations which are beneficial for transactions which tend to read and write the same keys within a single transaction.
+    When this option is invoked, a read performed by a transaction will not see any prior mutations that occurred in that transaction, instead seeing the value which was in the database at the transaction's read version. This option may provide a small performance benefit for the client, but also disables a number of client-side optimizations which are beneficial for transactions which tend to read and write the same keys within a single transaction.
 
 .. |option-read-your-writes-disable-note| replace::
 
@@ -460,7 +457,7 @@
 
 .. |future-cancel-blurb| replace::
 
-    Cancels |future-type-string| and its associated asynchronous operation. If called before the future is ready, attempts to access its value will |error-raise-type| an :ref:`operation_cancelled <developer-guide-error-codes>` |error-type|. Cancelling a future which is already ready has no effect. Note that even if a future is not ready, its associated asynchronous operation may have succesfully completed and be unable to be cancelled.
+    Cancels |future-type-string| and its associated asynchronous operation. If called before the future is ready, attempts to access its value will |error-raise-type| an :ref:`operation_cancelled <developer-guide-error-codes>` |error-type|. Cancelling a future which is already ready has no effect. Note that even if a future is not ready, its associated asynchronous operation may have successfully completed and be unable to be cancelled.
 
 .. |fdb-open-blurb1| replace::
     Connects to the cluster specified by the :ref:`cluster file <foundationdb-cluster-file>`. This function is often called without any parameters, using only the defaults. If no cluster file is passed, FoundationDB automatically :ref:`determines a cluster file <specifying-a-cluster-file>` with which to connect to a cluster.
@@ -509,7 +506,7 @@
     Returns the tuple encoded by the given key, with the subspace's prefix tuple and raw prefix removed.
 
 .. |subspace-range-blurb| replace::
-    Returns a range representing all keys in the subspace that encode tuples strictly starting with the specifed tuple.
+    Returns a range representing all keys in the subspace that encode tuples strictly starting with the specified tuple.
 
 .. |subspace-contains-blurb| replace::
     Returns true if ``key`` starts with |key-meth|, indicating that the subspace logically contains ``key``.

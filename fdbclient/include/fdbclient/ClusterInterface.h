@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -161,7 +161,7 @@ struct SystemFailureStatus {
 	NetworkAddressList addresses;
 	FailureStatus status;
 
-	SystemFailureStatus() {}
+	SystemFailureStatus() = default;
 	SystemFailureStatus(NetworkAddressList const& a, FailureStatus const& s) : addresses(a), status(s) {}
 
 	template <class Ar>
@@ -221,7 +221,7 @@ struct StatusReply {
 	StatusObject statusObj;
 	std::string statusStr;
 
-	StatusReply() {}
+	StatusReply() = default;
 	explicit StatusReply(StatusObject obj)
 	  : statusObj(obj), statusStr(json_spirit::write_string(json_spirit::mValue(obj))) {}
 	explicit StatusReply(std::string&& text) : statusStr(text) {}
@@ -237,7 +237,7 @@ struct StatusReply {
 				// In non-simulation allow errors because some status data is better than no status data
 				json_spirit::read_string(statusStr, mv);
 			}
-			statusObj = std::move(mv.get_obj());
+			statusObj = mv.get_obj();
 		}
 	}
 };
@@ -245,10 +245,14 @@ struct StatusReply {
 struct StatusRequest {
 	constexpr static FileIdentifier file_identifier = 14419140;
 	ReplyPromise<struct StatusReply> reply;
+	std::string statusField;
+
+	StatusRequest() = default;
+	explicit StatusRequest(std::string statusField) : statusField(statusField) {}
 
 	template <class Ar>
 	void serialize(Ar& ar) {
-		serializer(ar, reply);
+		serializer(ar, reply, statusField);
 	}
 };
 
@@ -256,7 +260,7 @@ struct GetClientWorkersRequest {
 	constexpr static FileIdentifier file_identifier = 10771791;
 	ReplyPromise<std::vector<ClientWorkerInterface>> reply;
 
-	GetClientWorkersRequest() {}
+	GetClientWorkersRequest() = default;
 
 	template <class Ar>
 	void serialize(Ar& ar) {
@@ -269,7 +273,7 @@ struct ForceRecoveryRequest {
 	Key dcId;
 	ReplyPromise<Void> reply;
 
-	ForceRecoveryRequest() {}
+	ForceRecoveryRequest() = default;
 	explicit ForceRecoveryRequest(Key dcId) : dcId(dcId) {}
 
 	template <class Ar>
@@ -286,7 +290,7 @@ struct MoveShardRequest {
 	std::vector<NetworkAddress> addresses;
 	ReplyPromise<Void> reply;
 
-	MoveShardRequest() {}
+	MoveShardRequest() = default;
 	MoveShardRequest(KeyRange shard, std::vector<NetworkAddress> addresses)
 	  : shard{ std::move(shard) }, addresses{ std::move(addresses) } {}
 
@@ -304,7 +308,7 @@ struct RepairSystemDataRequest {
 
 	ReplyPromise<Void> reply;
 
-	RepairSystemDataRequest() {}
+	RepairSystemDataRequest() = default;
 
 	template <class Ar>
 	void serialize(Ar& ar) {
@@ -317,7 +321,7 @@ struct SplitShardReply {
 	constexpr static FileIdentifier file_identifier = 1384440;
 	std::vector<KeyRange> shards;
 
-	SplitShardReply() {}
+	SplitShardReply() = default;
 	explicit SplitShardReply(std::vector<KeyRange> shards) : shards{ std::move(shards) } {}
 
 	template <class Ar>

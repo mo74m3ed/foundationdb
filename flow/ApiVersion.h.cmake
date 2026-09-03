@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ class ApiVersion {
 	int _version;
 
 public:
-	// Statics.
+	// Static members.
 	constexpr static int LATEST_VERSION = @FDB_AV_LATEST_VERSION@;
 
 	constexpr explicit ApiVersion(int version) : _version(version) {}
@@ -83,7 +83,7 @@ public: // introduced features
     API_VERSION_FEATURE(@FDB_AV_GET_CLIENT_STATUS@, GetClientStatus);
     API_VERSION_FEATURE(@FDB_AV_INITIALIZE_TRACE_ON_SETUP@, InitializeTraceOnSetup);
     API_VERSION_FEATURE(@FDB_AV_TENANT_GET_ID@, TenantGetId);
-    API_VERSION_FEATURE(@FDB_AV_EVOLVABLE_BLOB_GRANULE_API@, EvolvableBlobGranuleApi);
+    API_VERSION_FEATURE(@FDB_AV_NATIVE_CDC_API@, NativeCdcApi);
 };
 
 #endif // FLOW_CODE_API_VERSION_H

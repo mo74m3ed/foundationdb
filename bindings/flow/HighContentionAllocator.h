@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@
 namespace FDB {
 class HighContentionAllocator {
 public:
-	HighContentionAllocator(Subspace subspace) : counters(subspace.get(0)), recent(subspace.get(1)) {}
+	explicit HighContentionAllocator(Subspace subspace) : counters(subspace.get(0)), recent(subspace.get(1)) {}
 	Future<Standalone<StringRef>> allocate(Reference<Transaction> const& tr) const;
 
 	static int64_t windowSize(int64_t start);

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,9 +22,12 @@
 #define FDBCLIENT_FDBTYPES_H
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
+#include <regex>
 #include <set>
 #include <string>
+#include <variant>
 #include <vector>
 #include <unordered_set>
 #include <boost/functional/hash.hpp>
@@ -32,16 +35,25 @@
 #include "flow/FastRef.h"
 #include "flow/ProtocolVersion.h"
 #include "flow/flow.h"
+#include "fdbclient/ProcessClass.h"
+#include "fdbclient/ProcessData.h"
 #include "fdbclient/Status.h"
+#include "fdbrpc/Locality.h"
 
-typedef int64_t Version;
-typedef uint64_t LogEpoch;
-typedef uint64_t Sequence;
-typedef StringRef KeyRef;
-typedef StringRef ValueRef;
-typedef int64_t Generation;
-typedef UID SpanID;
-typedef uint64_t CoordinatorsHash;
+using Version = int64_t;
+using CDCStreamId = uint64_t;
+using LogEpoch = uint64_t;
+using Sequence = uint64_t;
+using KeyRef = StringRef;
+using ValueRef = StringRef;
+using Generation = int64_t;
+using SpanID = UID;
+using CoordinatorsHash = uint64_t;
+
+// invalidKey is intentionally far beyond the system space.  It is meant to be used as a safe initial value for a key
+// before it is set to something meaningful to avoid mistakes where a default constructed key is written to instead of
+// the intended target.
+static const KeyRef invalidKey = "\xff\xff\xff\xff\xff\xff\xff\xff"_sr;
 
 // invalidKey is intentionally far beyond the system space.  It is meant to be used as a safe initial value for a key
 // before it is set to something meaningful to avoid mistakes where a default constructed key is written to instead of
@@ -49,14 +61,16 @@ typedef uint64_t CoordinatorsHash;
 static const KeyRef invalidKey = "\xff\xff\xff\xff\xff\xff\xff\xff"_sr;
 
 enum {
-	tagLocalitySpecial = -1, // tag with this locality means it is invalidTag (id=0), txsTag (id=1), or cacheTag (id=2)
+	tagLocalitySpecial = -1, // tag with this locality means it is invalidTag (id=0) or txsTag (id=1)
 	tagLocalityLogRouter = -2,
 	tagLocalityRemoteLog = -3, // tag created by log router for remote (aka. not in Primary DC) tLogs
-	tagLocalityUpgraded = -4, // tlogs with old log format
+	tagLocalityUpgraded = -4, // tlogs with old log format (no longer applicable)
 	tagLocalitySatellite = -5,
 	tagLocalityLogRouterMapped = -6, // The pseudo tag used by log routers to pop the real LogRouter tag (i.e., -2)
 	tagLocalityTxs = -7,
 	tagLocalityBackup = -8, // used by backup role to pop from TLogs
+	tagLocalityRangePartitionedBackup = -9, // used by range-partitioned backup workers
+	tagLocalityCDC = -10, // used by native change data capture streams
 	tagLocalityInvalid = -99
 }; // The TLog and LogRouter require these number to be as compact as possible
 
@@ -151,25 +165,17 @@ struct hash<Tag> {
 } // namespace std
 
 static const Tag invalidTag{ tagLocalitySpecial, 0 };
-static const Tag txsTag{ tagLocalitySpecial, 1 };
-static const Tag cacheTag{ tagLocalitySpecial, 2 };
-
-const int MATCH_INDEX_ALL = 0;
-const int MATCH_INDEX_NONE = 1;
-const int MATCH_INDEX_MATCHED_ONLY = 2;
-const int MATCH_INDEX_UNMATCHED_ONLY = 3;
-
-enum { txsTagOld = -1, invalidTagOld = -100 };
+static const Tag txsTag{ tagLocalitySpecial, 1 }; // obsolete now
 
 struct TagsAndMessage {
 	StringRef message;
 	VectorRef<Tag> tags;
 
-	TagsAndMessage() {}
+	TagsAndMessage() = default;
 	TagsAndMessage(StringRef message, VectorRef<Tag> tags) : message(message), tags(tags) {}
 
 	// Loads tags and message from a serialized buffer. "rd" is checkpointed at
-	// its begining position to allow the caller to rewind if needed.
+	// its beginning position to allow the caller to rewind if needed.
 	// T can be ArenaReader or BinaryReader.
 	template <class T>
 	void loadFromArena(T* rd, uint32_t* messageVersionSub) {
@@ -189,11 +195,11 @@ struct TagsAndMessage {
 	}
 
 	// Returns the size of the header, including: msg_length, version.sub, tag_count, tags.
-	int32_t getHeaderSize() const {
-		return sizeof(int32_t) + sizeof(uint32_t) + sizeof(uint16_t) + tags.size() * sizeof(Tag);
+	static int32_t getHeaderSize(int numTags) {
+		return sizeof(int32_t) + sizeof(uint32_t) + sizeof(uint16_t) + numTags * sizeof(Tag);
 	}
 
-	StringRef getMessageWithoutTags() const { return message.substr(getHeaderSize()); }
+	StringRef getMessageWithoutTags() const { return message.substr(getHeaderSize(tags.size())); }
 
 	// Returns the message with the header.
 	StringRef getRawMessage() const { return message; }
@@ -216,6 +222,10 @@ inline std::string describe(const int item) {
 	return format("%d", item);
 }
 
+inline std::string describe(const Version item) {
+	return format("%ld", item);
+}
+
 // Allows describeList to work on a vector of std::string
 std::string describe(const std::string& s);
 
@@ -233,7 +243,7 @@ std::string describe(T const& item) {
 
 template <class K, class V>
 std::string describe(std::map<K, V> const& items, int max_items = -1) {
-	if (!items.size())
+	if (items.empty())
 		return "[no items]";
 
 	std::string s;
@@ -250,7 +260,7 @@ std::string describe(std::map<K, V> const& items, int max_items = -1) {
 
 template <class T>
 std::string describeList(T const& items, int max_items) {
-	if (!items.size())
+	if (items.empty())
 		return "[no items]";
 
 	std::string s;
@@ -297,6 +307,7 @@ std::string printable(const VectorRef<KeyRangeRef>& val);
 std::string printable(const VectorRef<StringRef>& val);
 std::string printable(const VectorRef<KeyValueRef>& val);
 std::string printable(const KeyValueRef& val);
+std::string unprintable(std::string const& val);
 
 template <class T>
 std::string printable(const Optional<T>& val) {
@@ -313,10 +324,10 @@ inline bool equalsKeyAfter(const KeyRef& key, const KeyRef& compareKey) {
 
 struct KeyRangeRef {
 	const KeyRef begin, end;
-	KeyRangeRef() {}
+	KeyRangeRef() = default;
 	KeyRangeRef(const KeyRef& begin, const KeyRef& end) : begin(begin), end(end) {
 		if (begin > end) {
-			TraceEvent("InvertedRange").detail("Begin", begin).detail("End", end);
+			TraceEvent("InvertedRange").detail("Begin", begin).detail("End", end).backtrace();
 			throw inverted_range();
 		}
 	}
@@ -341,7 +352,6 @@ struct KeyRangeRef {
 	bool isCovered(std::vector<KeyRangeRef>& ranges) {
 		ASSERT(std::is_sorted(ranges.begin(), ranges.end(), KeyRangeRef::ArbitraryOrder()));
 		KeyRangeRef clone(begin, end);
-
 		for (auto r : ranges) {
 			if (clone.begin < r.begin)
 				return false; // uncovered gap between clone.begin and r.begin
@@ -386,14 +396,14 @@ struct KeyRangeRef {
 		} else {
 			serializer(ar, const_cast<KeyRef&>(begin), const_cast<KeyRef&>(end));
 		}
-		if (ar.isDeserializing && end == StringRef() && begin != StringRef()) {
+		if (ar.isDeserializing && end.empty() && !begin.empty()) {
 			ASSERT(begin[begin.size() - 1] == '\x00');
 			const_cast<KeyRef&>(end) = begin;
 			const_cast<KeyRef&>(begin) = end.substr(0, end.size() - 1);
 		}
 
 		if (begin > end) {
-			TraceEvent("InvertedRange").detail("Begin", begin).detail("End", end);
+			TraceEvent("InvertedRange").detail("Begin", begin).detail("End", end).backtrace();
 			throw inverted_range();
 		};
 	}
@@ -453,11 +463,24 @@ inline std::vector<KeyRangeRef> operator-(const KeyRangeRef& lhs, const KeyRange
 struct KeyValueRef {
 	KeyRef key;
 	ValueRef value;
-	KeyValueRef() {}
+	KeyValueRef() = default;
+
 	KeyValueRef(const KeyRef& key, const ValueRef& value) : key(key), value(value) {}
-	KeyValueRef(Arena& a, const KeyValueRef& copyFrom) : key(a, copyFrom.key), value(a, copyFrom.value) {}
+
+	KeyValueRef(Arena& a, const KeyRef& key, const ValueRef& value) {
+		StringRef storage = makeString(key.size() + value.size(), a);
+		uint8_t* dst = mutateString(storage);
+
+		key.copyTo(dst);
+		value.copyTo(dst + key.size());
+
+		this->key = KeyRef(storage.begin(), key.size());
+		this->value = ValueRef(storage.begin() + key.size(), value.size());
+	}
+
+	KeyValueRef(Arena& a, const KeyValueRef& copyFrom) : KeyValueRef(a, copyFrom.key, copyFrom.value) {}
+
 	bool operator==(const KeyValueRef& r) const { return key == r.key && value == r.value; }
-	bool operator!=(const KeyValueRef& r) const { return key != r.key || value != r.value; }
 
 	int expectedSize() const { return key.expectedSize() + value.expectedSize(); }
 
@@ -662,9 +685,11 @@ public:
 	bool isLastLessOrEqual() const { return orEqual && offset == 0; }
 
 	// True iff, regardless of the contents of the database, lhs must resolve to a key > rhs
-	bool isDefinitelyGreater(KeyRef const& k) { return offset >= 1 && (isFirstGreaterOrEqual() ? key > k : key >= k); }
+	bool isDefinitelyGreater(KeyRef const& k) const {
+		return offset >= 1 && (isFirstGreaterOrEqual() ? key > k : key >= k);
+	}
 	// True iff, regardless of the contents of the database, lhs must resolve to a key < rhs
-	bool isDefinitelyLess(KeyRef const& k) { return offset <= 0 && (isLastLessOrEqual() ? key < k : key <= k); }
+	bool isDefinitelyLess(KeyRef const& k) const { return offset <= 0 && (isLastLessOrEqual() ? key < k : key <= k); }
 
 	template <class Ar>
 	void serialize(Ar& ar) {
@@ -706,7 +731,7 @@ struct Traceable<KeySelectorRef> : std::true_type {
 template <class Val>
 struct KeyRangeWith : KeyRange {
 	Val value;
-	KeyRangeWith() {}
+	KeyRangeWith() = default;
 	KeyRangeWith(const KeyRangeRef& range, const Val& value) : KeyRange(range), value(value) {}
 	bool operator==(const KeyRangeWith& r) const { return KeyRangeRef::operator==(r) && value == r.value; }
 
@@ -781,7 +806,7 @@ struct RangeResultRef : VectorRef<KeyValueRef> {
 		if (readThrough.present()) {
 			return readThrough.get();
 		}
-		ASSERT(size() > 0);
+		ASSERT(!empty());
 		return reverse ? back().key : keyAfter(back().key);
 	}
 
@@ -792,7 +817,7 @@ struct RangeResultRef : VectorRef<KeyValueRef> {
 		if (readThrough.present()) {
 			return firstGreaterOrEqual(readThrough.get());
 		}
-		ASSERT(size() > 0);
+		ASSERT(!empty());
 		return firstGreaterThan(back().key);
 	}
 
@@ -802,7 +827,7 @@ struct RangeResultRef : VectorRef<KeyValueRef> {
 		if (readThrough.present()) {
 			return firstGreaterOrEqual(readThrough.get());
 		}
-		ASSERT(size() > 0);
+		ASSERT(!empty());
 		return firstGreaterOrEqual(back().key);
 	}
 
@@ -831,7 +856,7 @@ struct RangeResultRef : VectorRef<KeyValueRef> {
 		serializer(ar, ((VectorRef<KeyValueRef>&)*this), more, readThrough, readToBegin, readThroughEnd);
 	}
 
-	int logicalSize() const {
+	int64_t logicalSize() const {
 		return VectorRef<KeyValueRef>::expectedSize() - VectorRef<KeyValueRef>::size() * sizeof(KeyValueRef);
 	}
 
@@ -854,7 +879,7 @@ struct GetValueReqAndResultRef {
 	KeyRef key;
 	Optional<ValueRef> result;
 
-	GetValueReqAndResultRef() {}
+	GetValueReqAndResultRef() = default;
 	GetValueReqAndResultRef(Arena& a, const GetValueReqAndResultRef& copyFrom)
 	  : key(a, copyFrom.key), result(a, copyFrom.result) {}
 
@@ -872,7 +897,7 @@ struct GetRangeReqAndResultRef {
 	KeySelectorRef begin, end;
 	RangeResultRef result;
 
-	GetRangeReqAndResultRef() {}
+	GetRangeReqAndResultRef() = default;
 	//	KeyValueRef(const KeyRef& key, const ValueRef& value) : key(key), value(value) {}
 	GetRangeReqAndResultRef(Arena& a, const GetRangeReqAndResultRef& copyFrom)
 	  : begin(a, copyFrom.begin), end(a, copyFrom.end), result(a, copyFrom.result) {}
@@ -976,11 +1001,12 @@ struct KeyValueStoreType {
 		MEMORY_RADIXTREE = 4,
 		SSD_ROCKSDB_V1 = 5,
 		SSD_SHARDED_ROCKSDB = 6,
+		NONE = 7,
 		END
 	};
 
 	KeyValueStoreType() : type(END) {}
-	KeyValueStoreType(StoreType type) : type(type) {
+	explicit(false) KeyValueStoreType(StoreType type) : type(type) {
 		if ((uint32_t)type > END)
 			this->type = END;
 	}
@@ -1000,6 +1026,9 @@ struct KeyValueStoreType {
 	// This is a many-to-one mapping as there are aliases for some storage engines
 	static KeyValueStoreType fromString(const std::string& str);
 	std::string toString() const { return getStoreTypeStr((StoreType)type); }
+
+	// Whether the storage type is a valid storage type.
+	bool isValid() const { return type != NONE && type != END; }
 
 private:
 	uint32_t type;
@@ -1027,14 +1056,14 @@ struct TLogVersion {
 		V5 = 5, // 6.3
 		V6 = 6, // 7.0
 		V7 = 7, // 7.2
-		MIN_SUPPORTED = V2,
+		MIN_SUPPORTED = V5,
 		MAX_SUPPORTED = V7,
 		MIN_RECRUITABLE = V6,
-		DEFAULT = V6,
+		DEFAULT = V7,
 	} version;
 
 	TLogVersion() : version(UNSET) {}
-	TLogVersion(Version v) : version(v) {}
+	explicit(false) TLogVersion(Version v) : version(v) {}
 
 	operator Version() const { return version; }
 
@@ -1079,7 +1108,7 @@ struct TLogSpillType {
 	};
 
 	TLogSpillType() : type(DEFAULT) {}
-	TLogSpillType(SpillType type) : type(type) {
+	explicit(false) TLogSpillType(SpillType type) : type(type) {
 		if ((uint32_t)type >= END) {
 			this->type = UNSET;
 		}
@@ -1131,7 +1160,7 @@ struct StorageBytes {
 	// Amount of space that could eventually be available for use after garbage collection
 	int64_t temp;
 
-	StorageBytes() {}
+	StorageBytes() = default;
 	StorageBytes(int64_t free, int64_t total, int64_t used, int64_t available, int64_t temp = 0)
 	  : free(free), total(total), used(used), available(available), temp(temp) {}
 
@@ -1159,7 +1188,7 @@ struct StorageBytes {
 };
 struct LogMessageVersion {
 	// Each message pushed into the log system has a unique, totally ordered LogMessageVersion
-	// See ILogSystem::push() for how these are assigned
+	// See LogSystem::push() for how these are assigned
 	Version version;
 	uint32_t sub;
 
@@ -1195,7 +1224,7 @@ struct LogMessageVersion {
 };
 
 inline bool addressExcluded(std::set<AddressExclusion> const& exclusions, NetworkAddress const& addr) {
-	return exclusions.count(AddressExclusion(addr.ip, addr.port)) || exclusions.count(AddressExclusion(addr.ip));
+	return exclusions.contains(AddressExclusion(addr.ip, addr.port)) || exclusions.contains(AddressExclusion(addr.ip));
 }
 
 struct ClusterControllerPriorityInfo {
@@ -1209,7 +1238,7 @@ struct ClusterControllerPriorityInfo {
 	}; // cannot be larger than 7 because of leader election mask
 
 	static DCFitness calculateDCFitness(Optional<Key> const& dcId, std::vector<Optional<Key>> const& dcPriority) {
-		if (!dcPriority.size()) {
+		if (dcPriority.empty()) {
 			return FitnessUnknown;
 		} else if (dcPriority.size() == 1) {
 			if (dcId == dcPriority[0]) {
@@ -1237,7 +1266,7 @@ struct ClusterControllerPriorityInfo {
 	}
 	bool operator!=(ClusterControllerPriorityInfo const& r) const { return !(*this == r); }
 	ClusterControllerPriorityInfo()
-	  : ClusterControllerPriorityInfo(/*ProcessClass::UnsetFit*/ 2,
+	  : ClusterControllerPriorityInfo(/* process class fitness: UnsetFit */ 2,
 	                                  false,
 	                                  ClusterControllerPriorityInfo::FitnessUnknown) {}
 	ClusterControllerPriorityInfo(uint8_t processClassFitness, bool isExcluded, uint8_t dcFitness)
@@ -1327,16 +1356,19 @@ struct HealthMetrics {
 
 struct DDMetricsRef {
 	int64_t shardBytes;
+	int64_t shardBytesPerKSecond;
 	KeyRef beginKey;
 
-	DDMetricsRef() : shardBytes(0) {}
-	DDMetricsRef(int64_t bytes, KeyRef begin) : shardBytes(bytes), beginKey(begin) {}
+	DDMetricsRef() : shardBytes(0), shardBytesPerKSecond(0) {}
+	DDMetricsRef(int64_t bytes, int64_t bytesPerKSecond, KeyRef begin)
+	  : shardBytes(bytes), shardBytesPerKSecond(bytesPerKSecond), beginKey(begin) {}
 	DDMetricsRef(Arena& a, const DDMetricsRef& copyFrom)
-	  : shardBytes(copyFrom.shardBytes), beginKey(a, copyFrom.beginKey) {}
+	  : shardBytes(copyFrom.shardBytes), shardBytesPerKSecond(copyFrom.shardBytesPerKSecond),
+	    beginKey(a, copyFrom.beginKey) {}
 
 	template <class Ar>
 	void serialize(Ar& ar) {
-		serializer(ar, shardBytes, beginKey);
+		serializer(ar, shardBytes, beginKey, shardBytesPerKSecond);
 	}
 };
 
@@ -1385,7 +1417,7 @@ struct StorageMigrationType {
 	enum MigrationType { DEFAULT = 1, UNSET = 0, DISABLED = 1, AGGRESSIVE = 2, GRADUAL = 3, END = 4 };
 
 	StorageMigrationType() : type(UNSET) {}
-	StorageMigrationType(MigrationType type) : type(type) {
+	explicit(false) StorageMigrationType(MigrationType type) : type(type) {
 		if ((uint32_t)type >= END) {
 			this->type = UNSET;
 		}
@@ -1416,89 +1448,20 @@ struct StorageMigrationType {
 	uint32_t type;
 };
 
-struct TenantMode {
+// We assume this type is persistend in database metadata. Rename it to indicate
+// deprecation status, but leave the values as-is so that they can be interpreted.
+struct EncryptionAtRestModeDeprecated {
 	// These enumerated values are stored in the database configuration, so can NEVER be changed.  Only add new ones
 	// just before END.
-	// Note: OPTIONAL_TENANT is not named OPTIONAL because of a collision with a Windows macro.
-	enum Mode { DISABLED = 0, OPTIONAL_TENANT = 1, REQUIRED = 2, END = 3 };
+	enum Mode {
+		DISABLED = 0,
+		DOMAIN_AWARE = 1,
+		CLUSTER_AWARE = 2,
+		END = 3,
+	};
 
-	TenantMode() : mode(DISABLED) {}
-	TenantMode(Mode mode) : mode(mode) {
-		if ((uint32_t)mode >= END) {
-			this->mode = DISABLED;
-		}
-	}
-	operator Mode() const { return Mode(mode); }
-
-	template <class Ar>
-	void serialize(Ar& ar) {
-		serializer(ar, mode);
-	}
-
-	// This does not go back-and-forth cleanly with toString
-	// The '_experimental' suffix, if present, needs to be removed in order to be parsed.
-	static TenantMode fromString(std::string mode) {
-		if (mode.find("_experimental") != std::string::npos) {
-			mode.replace(mode.find("_experimental"), std::string::npos, "");
-		}
-		if (mode == "disabled") {
-			return TenantMode::DISABLED;
-		} else if (mode == "optional") {
-			return TenantMode::OPTIONAL_TENANT;
-		} else if (mode == "required") {
-			return TenantMode::REQUIRED;
-		} else {
-			TraceEvent(SevError, "UnknownTenantMode").detail("TenantMode", mode);
-			ASSERT(false);
-			throw internal_error();
-		}
-	}
-
-	std::string toString() const {
-		switch (mode) {
-		case DISABLED:
-			return "disabled";
-		case OPTIONAL_TENANT:
-			return "optional_experimental";
-		case REQUIRED:
-			return "required_experimental";
-		default:
-			ASSERT(false);
-		}
-		return "";
-	}
-
-	Value toValue() const { return ValueRef(format("%d", (int)mode)); }
-
-	static TenantMode fromValue(Optional<ValueRef> val) {
-		if (!val.present()) {
-			return DISABLED;
-		}
-
-		// A failed parsing returns 0 (DISABLED)
-		int num = atoi(val.get().toString().c_str());
-		if (num < 0 || num >= END) {
-			return DISABLED;
-		}
-
-		return static_cast<Mode>(num);
-	}
-
-	uint32_t mode;
-};
-
-template <>
-struct Traceable<TenantMode> : std::true_type {
-	static std::string toString(const TenantMode& value) { return value.toString(); }
-};
-
-struct EncryptionAtRestMode {
-	// These enumerated values are stored in the database configuration, so can NEVER be changed.  Only add new ones
-	// just before END.
-	enum Mode { DISABLED = 0, DOMAIN_AWARE = 1, CLUSTER_AWARE = 2, END = 3 };
-
-	EncryptionAtRestMode() : mode(DISABLED) {}
-	EncryptionAtRestMode(Mode mode) : mode(mode) {
+	EncryptionAtRestModeDeprecated() : mode(DISABLED) {}
+	explicit(false) EncryptionAtRestModeDeprecated(Mode mode) : mode(mode) {
 		if ((uint32_t)mode >= END) {
 			this->mode = DISABLED;
 		}
@@ -1524,13 +1487,13 @@ struct EncryptionAtRestMode {
 		return "";
 	}
 
-	static EncryptionAtRestMode fromString(std::string mode) {
+	static EncryptionAtRestModeDeprecated fromString(std::string mode) {
 		if (mode == "disabled") {
-			return EncryptionAtRestMode::DISABLED;
+			return EncryptionAtRestModeDeprecated::DISABLED;
 		} else if (mode == "cluster_aware") {
-			return EncryptionAtRestMode::CLUSTER_AWARE;
+			return EncryptionAtRestModeDeprecated::CLUSTER_AWARE;
 		} else if (mode == "domain_aware") {
-			return EncryptionAtRestMode::DOMAIN_AWARE;
+			return EncryptionAtRestModeDeprecated::DOMAIN_AWARE;
 		} else {
 			TraceEvent(SevError, "UnknownEncryptMode").detail("EncryptMode", mode);
 			ASSERT(false);
@@ -1540,16 +1503,16 @@ struct EncryptionAtRestMode {
 
 	Value toValue() const { return ValueRef(format("%d", (int)mode)); }
 
-	bool isEquals(const EncryptionAtRestMode& e) const { return this->mode == e.mode; }
+	bool isEquals(const EncryptionAtRestModeDeprecated& e) const { return this->mode == e.mode; }
 
-	bool operator==(const EncryptionAtRestMode& e) const { return isEquals(e); }
-	bool operator!=(const EncryptionAtRestMode& e) const { return !isEquals(e); }
+	bool operator==(const EncryptionAtRestModeDeprecated& e) const { return isEquals(e); }
+	bool operator!=(const EncryptionAtRestModeDeprecated& e) const { return !isEquals(e); }
 	bool operator==(Mode m) const { return mode == m; }
 	bool operator!=(Mode m) const { return mode != m; }
 
-	bool isEncryptionEnabled() const { return mode != EncryptionAtRestMode::DISABLED; }
+	bool isEncryptionEnabled() const { return mode != EncryptionAtRestModeDeprecated::DISABLED; }
 
-	static EncryptionAtRestMode fromValueRef(Optional<ValueRef> val) {
+	static EncryptionAtRestModeDeprecated fromValueRef(Optional<ValueRef> val) {
 		if (!val.present()) {
 			return DISABLED;
 		}
@@ -1563,26 +1526,23 @@ struct EncryptionAtRestMode {
 		return static_cast<Mode>(num);
 	}
 
-	static EncryptionAtRestMode fromValue(Optional<Value> val) {
+	static EncryptionAtRestModeDeprecated fromValue(Optional<Value> val) {
 		if (!val.present()) {
-			return EncryptionAtRestMode();
+			return EncryptionAtRestModeDeprecated();
 		}
 
-		return EncryptionAtRestMode::fromValueRef(Optional<ValueRef>(val.get().contents()));
+		return EncryptionAtRestModeDeprecated::fromValueRef(Optional<ValueRef>(val.get().contents()));
 	}
 
 	uint32_t mode;
 };
 
 template <>
-struct Traceable<EncryptionAtRestMode> : std::true_type {
-	static std::string toString(const EncryptionAtRestMode& mode) { return mode.toString(); }
+struct Traceable<EncryptionAtRestModeDeprecated> : std::true_type {
+	static std::string toString(const EncryptionAtRestModeDeprecated& mode) { return mode.toString(); }
 };
 
-typedef StringRef ClusterNameRef;
-typedef Standalone<ClusterNameRef> ClusterName;
-
-enum class ClusterType { STANDALONE, METACLUSTER_MANAGEMENT, METACLUSTER_DATA };
+enum class ClusterType { STANDALONE, LEGACY_UNUSED_METACLUSTER_MANAGEMENT, LEGACY_UNUSED_METACLUSTER_DATA };
 
 struct GRVCacheSpace {
 	Version cachedReadVersion;
@@ -1608,38 +1568,22 @@ struct DatabaseSharedState {
 	  : protocolVersion(currentProtocolVersion()), mutexLock(Mutex()), grvCacheSpace(GRVCacheSpace()), refCount(0) {}
 };
 
+const static std::regex wiggleLocalityValidation("([\\w_]+:[\\w\\-_\\.0-9]+)(;[\\w_]+:[\\w\\-_\\.0-9]+)*");
 inline bool isValidPerpetualStorageWiggleLocality(std::string locality) {
-	int pos = locality.find(':');
-	// locality should be either 0 or in the format '<non_empty_string>:<non_empty_string>'
-	return ((pos > 0 && pos < locality.size() - 1) || locality == "0");
+	if (locality == "0") {
+		return true;
+	}
+	return std::regex_match(locality, wiggleLocalityValidation);
 }
 
-// matches what's in fdb_c.h
-struct ReadBlobGranuleContext {
-	// User context to pass along to functions
-	void* userContext;
+// Parses `perpetual_storage_wiggle_locality` database option.
+std::vector<std::pair<Optional<Value>, Optional<Value>>> ParsePerpetualStorageWiggleLocality(
+    const std::string& localityKeyValues);
 
-	// Returns a unique id for the load. Asynchronous to support queueing multiple in parallel.
-	int64_t (*start_load_f)(const char* filename,
-	                        int filenameLength,
-	                        int64_t offset,
-	                        int64_t length,
-	                        int64_t fullFileLength,
-	                        void* context);
-
-	// Returns data for the load. Pass the loadId returned by start_load_f
-	uint8_t* (*get_load_f)(int64_t loadId, void* context);
-
-	// Frees data from load. Pass the loadId returned by start_load_f
-	void (*free_load_f)(int64_t loadId, void* context);
-
-	// Set this to true for testing if you don't want to read the granule files,
-	// just do the request to the blob workers
-	bool debugNoMaterialize;
-
-	// number of granules to load in parallel (default 1)
-	int granuleParallelism = 1;
-};
+// Whether the locality matches any locality filter in `localityKeyValues` (which is supposed to be parsed from
+// ParsePerpetualStorageWiggleLocality).
+bool localityMatchInList(const std::vector<std::pair<Optional<Value>, Optional<Value>>>& localityKeyValues,
+                         const LocalityData& locality);
 
 // Store metadata associated with each storage server. Now it only contains data be used in perpetual storage
 // wiggle.
@@ -1650,24 +1594,30 @@ struct StorageMetadataType {
 	KeyValueStoreType storeType;
 
 	// no need to serialize part (should be assigned after initialization)
-	bool wrongConfigured = false;
+	// Used only during wiggling to find out if the SS has incorrect storageType
+	// compared to perpetualStorageWiggleType. If perpetualStorageWiggleType is not
+	// set, configuredStorageType is compared to SS storageType.
+	bool wrongConfiguredForWiggle = false;
 
 	StorageMetadataType() : createdTime(0) {}
-	StorageMetadataType(double t, KeyValueStoreType storeType = KeyValueStoreType::END, bool wrongConfigured = false)
-	  : createdTime(t), storeType(storeType), wrongConfigured(wrongConfigured) {}
+	explicit StorageMetadataType(double t,
+	                             KeyValueStoreType storeType = KeyValueStoreType::END,
+	                             bool wrongConfiguredForWiggle = false)
+	  : createdTime(t), storeType(storeType), wrongConfiguredForWiggle(wrongConfiguredForWiggle) {}
 
 	static double currentTime() { return g_network->timer(); }
 
 	bool operator==(const StorageMetadataType& b) const {
-		return createdTime == b.createdTime && storeType == b.storeType && wrongConfigured == b.wrongConfigured;
+		return createdTime == b.createdTime && storeType == b.storeType &&
+		       wrongConfiguredForWiggle == b.wrongConfiguredForWiggle;
 	}
 
 	bool operator<(const StorageMetadataType& b) const {
-		if (wrongConfigured == b.wrongConfigured) {
+		if (wrongConfiguredForWiggle == b.wrongConfiguredForWiggle) {
 			// the older SS has smaller createdTime
 			return createdTime < b.createdTime;
 		}
-		return wrongConfigured > b.wrongConfigured;
+		return wrongConfiguredForWiggle > b.wrongConfiguredForWiggle;
 	}
 
 	bool operator>(const StorageMetadataType& b) const { return b < *this; }
@@ -1693,7 +1643,7 @@ struct StorageWiggleValue {
 	constexpr static FileIdentifier file_identifier = 732124;
 	UID id; // storage id
 
-	StorageWiggleValue(UID id = UID(0, 0)) : id(id) {}
+	explicit StorageWiggleValue(UID id = UID(0, 0)) : id(id) {}
 
 	// To change this serialization, ProtocolVersion::PerpetualWiggleMetadata must be updated, and downgrades need
 	// to be considered
@@ -1703,7 +1653,7 @@ struct StorageWiggleValue {
 	}
 };
 
-enum class ReadType { EAGER = 0, FETCH = 1, LOW = 2, NORMAL = 3, HIGH = 4, MIN = EAGER, MAX = HIGH };
+enum ReadType { EAGER = 0, FETCH = 1, LOW = 2, NORMAL = 3, HIGH = 4, MIN = EAGER, MAX = HIGH };
 
 FDB_BOOLEAN_PARAM(CacheResult);
 
@@ -1720,13 +1670,13 @@ struct ReadOptions {
 	Optional<UID> debugID;
 	Optional<Version> consistencyCheckStartVersion;
 
-	ReadOptions(Optional<UID> debugID = Optional<UID>(),
-	            ReadType type = ReadType::NORMAL,
-	            CacheResult cache = CacheResult::True,
-	            Optional<Version> version = Optional<Version>())
-	  : type(type), cacheResult(cache), debugID(debugID), consistencyCheckStartVersion(version){};
+	explicit ReadOptions(Optional<UID> debugID = Optional<UID>(),
+	                     ReadType type = ReadType::NORMAL,
+	                     CacheResult cache = CacheResult::True,
+	                     Optional<Version> version = Optional<Version>())
+	  : type(type), cacheResult(cache), debugID(debugID), consistencyCheckStartVersion(version) {}
 
-	ReadOptions(ReadType type, CacheResult cache = CacheResult::True) : ReadOptions({}, type, cache) {}
+	explicit ReadOptions(ReadType type, CacheResult cache = CacheResult::True) : ReadOptions({}, type, cache) {}
 
 	template <class Ar>
 	void serialize(Ar& ar) {
@@ -1736,11 +1686,15 @@ struct ReadOptions {
 
 // Can be used to identify types (e.g. IDatabase) that can be used to create transactions with a `createTransaction`
 // function
-template <typename, typename = void>
+template <typename>
 struct transaction_creator_traits : std::false_type {};
 
 template <typename T>
-struct transaction_creator_traits<T, std::void_t<typename T::TransactionT>> : std::true_type {};
+    requires requires { typename T::TransactionT; }
+struct transaction_creator_traits<T> : std::true_type {};
+
+template <typename T>
+struct transaction_creator_traits<Reference<T>> : transaction_creator_traits<T> {};
 
 template <typename T>
 struct transaction_creator_traits<Reference<T>> : transaction_creator_traits<T> {};
@@ -1761,9 +1715,9 @@ struct Versionstamp {
 	bool operator<=(const Versionstamp& r) const { return !(*this > r); }
 	bool operator>=(const Versionstamp& r) const { return !(*this < r); }
 
-	Versionstamp() {}
+	Versionstamp() = default;
 	Versionstamp(Version version, uint16_t batchNumber) : version(version), batchNumber(batchNumber) {}
-	Versionstamp(Standalone<StringRef> str) {
+	explicit Versionstamp(Standalone<StringRef> str) {
 		ASSERT(str.size() == sizeof(Version) + sizeof(batchNumber));
 		version = bigEndian64(*reinterpret_cast<const Version*>(str.begin()));
 		batchNumber = bigEndian16(*reinterpret_cast<const uint16_t*>(str.begin() + sizeof(Version)));

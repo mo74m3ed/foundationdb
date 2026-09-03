@@ -36,7 +36,7 @@ System requirements
 * 4GB **ECC** RAM (per fdbserver process)
 * Storage
 
-  * SSDs are required when storing data sets larger than memory (using the ``ssd`` storage engine).
+  * SSDs are required when storing data sets larger than memory (using the ``ssd`` or ``ssd-redwood-v1`` or ``ssd-rocksdb-v1`` storage engine).
   * HDDs are OK when storing data sets smaller than memory (using the ``memory`` storage engine).
   * For more information, see :ref:`configuration-configuring-storage-subsystem`.
 
@@ -218,6 +218,7 @@ Contains basic configuration parameters of the ``fdbmonitor`` process. ``user`` 
     # initial-restart-delay = 0
     # restart-backoff = 60.0
     # restart-delay-reset-interval = 60
+    # envvars = FOO=BAR BAZ=FOO
     # delete-envvars =
     # kill-on-configuration-change = true
     # disable-lifecycle-logging = false
@@ -225,7 +226,8 @@ Contains basic configuration parameters of the ``fdbmonitor`` process. ``user`` 
 Contains settings applicable to all processes (e.g. fdbserver, backup_agent).
 
 * ``cluster-file``: Specifies the location of the cluster file. This file and the directory that contains it must be writable by all processes (i.e. by the user or group set in the ``[fdbmonitor]`` section).
-* ``delete-envvars``: A space separated list of environment variables to remove from the environments of child processes. This can be used if the ``fdbmonitor`` process needs to be run with environment variables that are undesired in its children.
+* ``envvars``: A space separated list of environment variables to be added to child processes' environment variables. Every environment variable in the list must be of the form ``A=B`` where ``A`` and ``B`` are key and value names respectively.
+* ``delete-envvars``: A space separated list of environment variables to remove from the environments of child processes. This can be used if the ``fdbmonitor`` process needs to be run with environment variables that are undesired in its children. This takes precedence over envvars field.
 * ``kill-on-configuration-change``: If ``true``, affected processes will be restarted whenever the configuration file changes. Defaults to ``true``.
 * ``disable-lifecycle-logging``: If ``true``, ``fdbmonitor`` will not write log events when processes start or terminate. Defaults to ``false``.
 
@@ -289,19 +291,21 @@ Contains default parameters for all fdbserver processes on this machine. These s
 * ``public-address``: The publicly visible IP:Port of the process. If ``auto``, the address will be the one used to communicate with the coordination servers.
 * ``listen-address``: The IP:Port that the server socket should bind to. If ``public``, it will be the same as the public-address.
 * ``datadir``: A writable directory (by root or by the user set in the [fdbmonitor] section) where persistent data files will be stored.
+* ``tlog-spill-datadir``: An optional writable directory where transaction logs store spilled data. Transaction log disk queues remain in ``datadir``. If unset, transaction logs store spilled data in ``datadir`` as well. The directory must be unique for each ``fdbserver`` process. Existing transaction log spill files in ``datadir`` remain readable after this setting is changed. To move existing spill files to the new disk as well, move the ``log-*`` and ``log2-*`` files while the process is stopped. After spill files have been moved to a separate ``tlog-spill-datadir``, reverting to a single-directory layout or downgrading to a binary without this option requires moving the ``log-*`` and ``log2-*`` files back into ``datadir`` while the process is stopped. On Linux, when ``data-filesystem`` validation is enabled and this directory is on a separate mount, configure ``tlog-spill-filesystem`` with the additional mount path.
 * ``logdir``: A writable directory (by root or by the user set in the [fdbmonitor] section) where FoundationDB will store log files.
 * ``logsize``: Roll over to a new log file after the current log file reaches the specified size. The default value is 10MiB.
 * ``maxlogssize``: Delete the oldest log file when the total size of all log files exceeds the specified size. If set to 0B, old log files will not be deleted. The default value is 100MiB.
 * ``class``: Process class specifying the roles that will be taken in the cluster. Recommended options are ``storage``, ``transaction``, ``stateless``. See :ref:`guidelines-process-class-config` for process class config recommendations.
 * ``memory``: Maximum resident memory used by the process. The default value is 8GiB. When specified without a unit, MiB is assumed. Setting to 0 means unlimited. This parameter does not change the memory allocation of the program. Rather, it sets a hard limit beyond which the process will kill itself and be restarted. The default value of 8GiB is double the intended memory usage in the default configuration (providing an emergency buffer to deal with memory leaks or similar problems). It is *not* recommended to decrease the value of this parameter below its default value. It may be *increased* if you wish to allocate a very large amount of storage engine memory or cache. In particular, when the ``storage-memory``  or ``cache-memory`` parameters are increased, the ``memory`` parameter should be increased by an equal amount.
 * ``memory-vsize``: Maximum virtual memory used by the process. The default value is 0, which means unlimited. When specified without a unit, MiB is assumed. Same as ``memory``, this parameter does not change the memory allocation of the program. Rather, it sets a hard limit beyond which the process will kill itself and be restarted.
-* ``storage-memory``: Maximum memory used for data storage. This parameter is used *only* with memory storage engine, not the ssd storage engine. The default value is 1GiB. When specified without a unit, MB is assumed. Clusters will be restricted to using this amount of memory per process for purposes of data storage. Memory overhead associated with storing the data is counted against this total. If you increase the ``storage-memory`` parameter, you should also increase the ``memory`` parameter by the same amount.
+* ``storage-memory``: Maximum memory used for data storage. This parameter is used *only* with memory storage engine, not with the other storage engines. The default value is 1GiB. When specified without a unit, MB is assumed. Clusters will be restricted to using this amount of memory per process for purposes of data storage. Memory overhead associated with storing the data is counted against this total. If you increase the ``storage-memory`` parameter, you should also increase the ``memory`` parameter by the same amount.
 * ``cache-memory``: Maximum memory used for caching pages from disk. The default value is 2GiB. When specified without a unit, MiB is assumed. If you increase the ``cache-memory`` parameter, you should also increase the ``memory`` parameter by the same amount.
 * ``locality-machineid``: Machine identifier key. All processes on a machine should share a unique id. By default, processes on a machine determine a unique id to share. This does not generally need to be set.
 * ``locality-zoneid``: Zone identifier key.  Processes that share a zone id are considered non-unique for the purposes of data replication. If unset, defaults to machine id.
 * ``locality-dcid``: Datacenter identifier key. All processes physically located in a datacenter should share the id. No default value. If you are depending on datacenter based replication this must be set on all processes.
 * ``locality-data-hall``: Data hall identifier key. All processes physically located in a data hall should share the id. No default value. If you are depending on data hall based replication this must be set on all processes.
 * ``io-trust-seconds``: Time in seconds that a read or write operation is allowed to take before timing out with an error. If an operation times out, all future operations on that file will fail with an error as well. Only has an effect when using AsyncFileKAIO in Linux. If unset, defaults to 0 which means timeout is disabled.
+* ``parentpid``: Die if the process ID of its parent differs from the one given.  The argument should always be ``$PID``, which will be substituted with the process ID of fdbmonitor.  Using this parameter will cause all fdbserver processes started by fdbmonitor to die if fdbmonitor is killed.
 
 .. note:: In addition to the options above, TLS settings as described for the :ref:`TLS plugin <configuring-tls>` can be specified in the [fdbserver] section.
 
@@ -322,7 +326,7 @@ Backup agent sections
 .. code-block:: ini
 
     [backup_agent]
-    command = /usr/lib/foundationdb/backup_agent/backup_agent
+    command = /usr/bin/backup_agent
     
     [backup_agent.1]
 
@@ -452,9 +456,9 @@ Configuring the storage subsystem
 Storage engines
 ---------------
 
-A storage engine is the part of the database that is responsible for storing data to disk. FoundationDB has two storage engines options, ``ssd`` and ``memory``.
+A storage engine is the part of the database that is responsible for storing data to disk. FoundationDB has four storage engines options, ``ssd``, ``ssd-redwood-v1``, ``ssd-rocksdb-v1`` and ``memory``.
 
-For both storage engines, FoundationDB commits transactions to disk with the number of copies indicated by the redundancy mode before reporting them committed. This procedure guarantees the *durability* needed for full ACID compliance. At the point of the commit, FoundationDB may have only *logged* the transaction, deferring the work of updating the disk representation. This deferral has significant advantages for latency and burst performance. Due to this deferral, it is possible for disk space usage to continue increasing after the last commit.
+For all storage engines, FoundationDB commits transactions to disk with the number of copies indicated by the redundancy mode before reporting them committed. This procedure guarantees the *durability* needed for full ACID compliance. At the point of the commit, FoundationDB may have only *logged* the transaction, deferring the work of updating the disk representation. This deferral has significant advantages for latency and burst performance. Due to this deferral, it is possible for disk space usage to continue increasing after the last commit.
 
 To change the storage engine, use the ``configure`` command of ``fdbcli``. For example::
 
@@ -494,6 +498,20 @@ To change the storage engine, use the ``configure`` command of ``fdbcli``. For e
     By default, each process using the memory storage engine is limited to storing 1 GB of data (including overhead). This limit can be changed using the ``storage_memory`` parameter as documented in :ref:`foundationdb.conf <foundationdb-conf>`.
 	
     When using the ``memory`` engine, especially with a larger memory limit, it can take some time (seconds to minutes) for a storage machine to start up. This is because it needs to reconstruct its in-memory data structure from the logs stored on disk.
+
+.. _configuration-storage-engine-redwood:
+
+``ssd-redwood-v1`` storage engine
+    *(optimized for SSD storage)*
+
+    Data is stored on disk in B-tree data structures optimized for use on :ref:`SSDs <ssd-info>`. This is an improved version of the SSD storage engine SQLite, expected to offer higher throughput and lower write amplification depending on the workload.
+
+.. _configuration-storage-engine-rocksdb:
+
+``ssd-rocksdb-v1`` storage engine
+    *(optimized for SSD storage)*
+
+    Data is stored on disk using LSM-tree (Log-Structured Merge Tree) data structures optimized for use on :ref:SSDs <ssd-info>. Data can be compressed and undergoes regular compaction, optimizing storage efficiency and reducing read amplification. RocksDB’s extensive tuning options allow the storage engine to be customized for both workload characteristics and hardware configurations.
 
 Storage locations
 ---------------------
@@ -707,7 +725,7 @@ The ``usable_regions`` configuration option determines the number of regions whi
 
 .. warning:: In release 6.0, ``usable_regions`` can only be configured to the values of ``1`` or ``2``, and a maximum of 2 regions can be defined in the ``regions`` json object.
 
-Increasing the ``usable_regions`` will start copying data from the active region to the remote region. Reducing the ``usable_regions`` will immediately drop the replicas in the remote region. During these changes, only one primary datacenter can have priority >= 0. This enforces exactly which region will lose its replica.
+Increasing the ``usable_regions`` will start copying data from the active region to the remote region. Reducing the ``usable_regions`` will drop the replicas in the remote region (on data distributor noticing the configuration change and marking the remote region's replicas as "undesired"). During these changes, only one primary datacenter can have priority >= 0. This enforces exactly which region will lose its replica.
 
 Changing the log routers configuration
 --------------------------------------

@@ -4,52 +4,52 @@ set(FORCE_ALL_COMPONENTS OFF CACHE BOOL "Fails cmake if not all dependencies are
 # jemalloc
 ################################################################################
 
-include(Jemalloc)
+if(USE_JEMALLOC)
+  if(NOT USE_CUSTOM_JEMALLOC)
+    find_package(jemalloc 5.3.0 REQUIRED)
+  else()
+    include(Jemalloc)
+  endif()
+endif()
 
 ################################################################################
 # Valgrind
 ################################################################################
 
 if(USE_VALGRIND)
-  find_package(Valgrind REQUIRED)
+  find_package(valgrind REQUIRED)
+  add_library(valgrind INTERFACE)
+  target_include_directories(valgrind INTERFACE "${valgrind_INCLUDE_DIRS}")
 endif()
 
 ################################################################################
-# SSL
+# SSL & ZLIB
 ################################################################################
 
-include(CheckSymbolExists)
+set(CMAKE_REQUIRED_INCLUDES ${OPENSSL_INCLUDE_DIR})
+# Statically link OpenSSL to FDB, see
+#    https://cmake.org/cmake/help/v3.24/module/FindOpenSSL.html
+# Without the flags, OpenSSL is dynamically linked.
+set(OPENSSL_USE_STATIC_LIBS TRUE)
+if (WIN32)
+  set(OPENSSL_MSVC_STATIC_RT ON)
+endif()
+# SSL requires ZLIB
+find_package(ZLIB REQUIRED)
+find_package(OpenSSL REQUIRED)
+add_compile_options(-DHAVE_OPENSSL)
 
-set(USE_WOLFSSL OFF CACHE BOOL "Build against WolfSSL instead of OpenSSL")
-set(USE_OPENSSL ON CACHE BOOL "Build against OpenSSL")
-if(USE_WOLFSSL)
-  set(WOLFSSL_USE_STATIC_LIBS TRUE)
-  find_package(WolfSSL)
-  if(WOLFSSL_FOUND)
-    set(CMAKE_REQUIRED_INCLUDES ${WOLFSSL_INCLUDE_DIR})
-    add_compile_options(-DHAVE_OPENSSL)
-    add_compile_options(-DHAVE_WOLFSSL)
-  else()
-    message(STATUS "WolfSSL was not found - Will compile without TLS Support")
-    message(STATUS "You can set WOLFSSL_ROOT_DIR to help cmake find it")
-    message(FATAL_ERROR "Unable to find WolfSSL")
-  endif()
-elseif(USE_OPENSSL)
-  set(OPENSSL_USE_STATIC_LIBS TRUE)
-  if(WIN32)
-    set(OPENSSL_MSVC_STATIC_RT ON)
-  endif()
-  find_package(OpenSSL)
-  if(OPENSSL_FOUND)
-    set(CMAKE_REQUIRED_INCLUDES ${OPENSSL_INCLUDE_DIR})
-    add_compile_options(-DHAVE_OPENSSL)
-  else()
-    message(STATUS "OpenSSL was not found - Will compile without TLS Support")
-    message(STATUS "You can set OPENSSL_ROOT_DIR to help cmake find it")
-    message(FATAL_ERROR "Unable to find OpenSSL")
-  endif()
+################################################################################
+# Swift Support
+################################################################################
+
+if (WITH_SWIFT)
+  message(DEBUG "Building with Swift")
+  add_definitions(-DWITH_SWIFT)
+  set(WITH_SWIFT ON)
 else()
-  message(FATAL_ERROR "Must set USE_WOLFSSL or USE_OPENSSL")
+  message(DEBUG "Not building with Swift")
+  set(WITH_SWIFT OFF)
 endif()
 
 ################################################################################
@@ -89,6 +89,13 @@ if(BUILD_C_BINDING AND WITH_PYTHON)
 else()
   set(WITH_C_BINDING OFF)
 endif()
+
+# mako is a benchmark client built on top of the C binding. Off by default
+# because nothing in the default build depends on it; opt in by configuring
+# CMake with -DBUILD_MAKO=ON. build-images.sh auto-detects packages/bin/mako
+# and includes it in the docker image when present. Also needed by the PGO
+# generate_profile target.
+option(BUILD_MAKO "build the mako benchmark client" OFF)
 
 ################################################################################
 # Java Bindings
@@ -151,6 +158,83 @@ else()
 endif()
 
 ################################################################################
+# Swift
+################################################################################
+
+option(BUILD_SWIFT_BINDING "build swift binding" ON)
+if(BUILD_SWIFT_BINDING AND NOT WITH_C_BINDING)
+  message(WARNING "Swift binding depends on C binding, but C binding is not enabled")
+endif()
+
+if(NOT BUILD_SWIFT_BINDING OR NOT BUILD_C_BINDING OR OPEN_FOR_IDE OR NOT WITH_SWIFT)
+  set(WITH_SWIFT_BINDING OFF)
+else()
+  find_program(SWIFT_EXECUTABLE swift)
+  if(SWIFT_EXECUTABLE AND CMAKE_Swift_COMPILER)
+    # Check Swift version - require 6.1 or higher
+    execute_process(
+      COMMAND ${SWIFT_EXECUTABLE} --version
+      OUTPUT_VARIABLE SWIFT_VERSION_OUTPUT
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    string(REGEX MATCH "Swift version ([0-9]+)\\.([0-9]+)" SWIFT_VERSION_MATCH "${SWIFT_VERSION_OUTPUT}")
+    if(SWIFT_VERSION_MATCH)
+      set(SWIFT_VERSION_MAJOR ${CMAKE_MATCH_1})
+      set(SWIFT_VERSION_MINOR ${CMAKE_MATCH_2})
+      set(SWIFT_VERSION "${SWIFT_VERSION_MAJOR}.${SWIFT_VERSION_MINOR}")
+      message(STATUS "Found Swift version ${SWIFT_VERSION}")
+
+      if(SWIFT_VERSION_MAJOR LESS 6 OR (SWIFT_VERSION_MAJOR EQUAL 6 AND SWIFT_VERSION_MINOR LESS 1))
+        message(STATUS "Swift bindings require Swift 6.1 or higher (found ${SWIFT_VERSION})")
+        set(WITH_SWIFT_BINDING OFF)
+      else()
+        set(WITH_SWIFT_BINDING ON)
+      endif()
+    else()
+      message(STATUS "Could not determine Swift version")
+      set(WITH_SWIFT_BINDING OFF)
+    endif()
+  else()
+    set(WITH_SWIFT_BINDING OFF)
+  endif()
+  if (USE_SANITIZER)
+    set(WITH_SWIFT_BINDING OFF)
+  endif()
+
+  # Swift bindings require Clang compiler
+  if(WITH_SWIFT_BINDING AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(STATUS "Swift bindings are not supported in non-Clang environment (current compiler: ${CMAKE_CXX_COMPILER_ID})")
+    set(WITH_SWIFT_BINDING OFF)
+  endif()
+
+  # Swift bindings on Linux require libc++ (Swift uses libc++ standard library)
+  if(WITH_SWIFT_BINDING AND NOT APPLE AND NOT USE_LIBCXX)
+    message(STATUS "Swift bindings on Linux require USE_LIBCXX=ON (Swift requires libc++ standard library)")
+    set(WITH_SWIFT_BINDING OFF)
+  endif()
+
+  if(NOT EXISTS "${CMAKE_SOURCE_DIR}/bindings/swift" AND WITH_SWIFT_BINDING)
+    message(STATUS "Swift bindings directory not found at ${CMAKE_SOURCE_DIR}/bindings/swift")
+    message(STATUS "Downloading Swift bindings from GitHub...")
+
+    # TODO: Make it download a release version if we are on release branch?
+    include(FetchContent)
+    FetchContent_Declare(
+      swift_bindings
+      GIT_REPOSITORY https://github.com/FoundationDB/fdb-swift-bindings.git
+      GIT_TAG        main
+      SOURCE_DIR     ${CMAKE_SOURCE_DIR}/bindings/swift
+      # Prevent automatic add_subdirectory by pointing to non-existent CMakeLists.txt location
+      SOURCE_SUBDIR  ".__none__"
+    )
+    # This will download but won't add to build due to SOURCE_SUBDIR trick
+    FetchContent_MakeAvailable(swift_bindings)
+    message(STATUS "Swift bindings downloaded successfully to ${CMAKE_SOURCE_DIR}/bindings/swift")
+  endif()
+
+endif()
+
+################################################################################
 # Ruby
 ################################################################################
 
@@ -173,45 +257,31 @@ endif()
 # RocksDB
 ################################################################################
 
-set(SSD_ROCKSDB_EXPERIMENTAL OFF CACHE BOOL "Build with experimental RocksDB support")
-set(PORTABLE_ROCKSDB ON CACHE BOOL "Compile RocksDB in portable mode") # Set this to OFF to compile RocksDB with `-march=native`
-set(ROCKSDB_SSE42 OFF CACHE BOOL "Compile RocksDB with SSE42 enabled")
-set(ROCKSDB_AVX ${USE_AVX} CACHE BOOL "Compile RocksDB with AVX enabled")
-set(ROCKSDB_AVX2 OFF CACHE BOOL "Compile RocksDB with AVX2 enabled")
+set(WITH_ROCKSDB ON CACHE BOOL "Build with experimental RocksDB support")
+ # PORTABLE flag for RockdDB changed as of this PR (with v8.3.2 and after): https://github.com/facebook/rocksdb/pull/11419
+ # https://github.com/facebook/rocksdb/blob/v8.6.7/CMakeLists.txt#L256
+set(PORTABLE_ROCKSDB 1 CACHE STRING "Minimum CPU arch to support (i.e. skylake, haswell, etc., or 0 = current CPU, 1 = baseline CPU)")
+set(ROCKSDB_TOOLS OFF CACHE BOOL "Compile RocksDB tools")
 set(WITH_LIBURING OFF CACHE BOOL "Build with liburing enabled") # Set this to ON to include liburing
-# RocksDB is currently enabled by default for GCC but does not build with the latest
-# Clang.
-if (SSD_ROCKSDB_EXPERIMENTAL AND NOT WIN32)
-  set(WITH_ROCKSDB_EXPERIMENTAL ON)
-else()
-  set(WITH_ROCKSDB_EXPERIMENTAL OFF)
-endif()
+# RocksDB version/commit configuration is in cmake/RocksDBVersion.cmake
 
 ################################################################################
 # TOML11
 ################################################################################
 
-# TOML can download and install itself into the binary directory, so it should
-# always be available.
-find_package(toml11 QUIET)
-if(toml11_FOUND)
-  add_library(toml11_target INTERFACE)
-  target_link_libraries(toml11_target INTERFACE toml11::toml11)
-else()
-  include(ExternalProject)  
-  ExternalProject_add(toml11Project
-    URL "https://github.com/ToruNiina/toml11/archive/v3.4.0.tar.gz"
-    URL_HASH SHA256=bc6d733efd9216af8c119d8ac64a805578c79cc82b813e4d1d880ca128bd154d
-    CMAKE_CACHE_ARGS
-      -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
-      -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
-      -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
-      -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_CURRENT_BINARY_DIR}/toml11
-      -Dtoml11_BUILD_TEST:BOOL=OFF
-    BUILD_ALWAYS ON)
-  add_library(toml11_target INTERFACE)
-  add_dependencies(toml11_target toml11Project)
-  target_include_directories(toml11_target SYSTEM INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/toml11/include)
+find_package(toml11 3.8.1 EXACT QUIET CONFIG)
+if(NOT toml11_FOUND)
+  include(FetchContent)
+  FetchContent_Declare(
+    toml11
+    URL "https://github.com/ToruNiina/toml11/archive/v3.8.1.tar.gz"
+    URL_HASH SHA256=6a3d20080ecca5ea42102c078d3415bef80920f6c4ea2258e87572876af77849
+    SOURCE_SUBDIR fdb_header_only_dependency
+  )
+  FetchContent_MakeAvailable(toml11)
+  add_library(toml11 INTERFACE)
+  target_include_directories(toml11 INTERFACE "${toml11_SOURCE_DIR}")
+  add_library(toml11::toml11 ALIAS toml11)
 endif()
 
 ################################################################################
@@ -242,6 +312,54 @@ endif()
 
 ################################################################################
 
+set(WITH_GRPC ON CACHE BOOL "Build FDB with gRPC support")
+
+if (WITH_GRPC)
+  # Setup search paths.
+  if (UNIX AND CMAKE_CXX_COMPILER_ID MATCHES "Clang$" AND USE_LIBCXX)
+    list(APPEND CMAKE_PREFIX_PATH /opt/grpc_clang)
+    message(STATUS "Using Clang version of gRPC")
+  else ()
+    list(APPEND CMAKE_PREFIX_PATH /opt/grpc)
+    message(STATUS "Using g++ version of gRPC")
+  endif ()
+
+  # Find dependencies for gRPC.
+  find_program(PROTOC_EXECUTABLE protoc
+    HINTS ${CMAKE_PREFIX_PATH}
+    PATH_SUFFIXES bin 
+  )
+  if (PROTOC_EXECUTABLE)
+    execute_process(
+      COMMAND ${PROTOC_EXECUTABLE} --version
+      OUTPUT_VARIABLE PROTOC_VERSION
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    string(REGEX MATCH "([0-9]+\\.[0-9]+)+" PROTOC_VERSION ${PROTOC_VERSION})
+    message(STATUS "protoc version: ${PROTOC_COMPILER} ${PROTOC_VERSION}")
+
+    if (PROTOC_VERSION VERSION_LESS "29.0")
+      message(WARNING "protoc version ${PROTOC_VERSION} is too old. Required: 29.0+")
+      set(PROTOC_EXECUTABLE NOTFOUND)
+    endif()
+  else ()
+    message(WARNING "protoc executable not found")
+  endif()
+
+  find_package(absl CONFIG)
+  find_package(utf8_range CONFIG)
+  find_package(protobuf CONFIG)
+  find_package(gRPC CONFIG)
+
+  if (PROTOC_EXECUTABLE AND gRPC_FOUND)
+    message(STATUS "gRPC found. Enabling gRPC for Flow.")
+    add_compile_definitions(FLOW_GRPC_ENABLED)
+  else()
+    message(WARNING "gRPC can't be enabled because of missing dependencies")
+    set(WITH_GRPC OFF)
+  endif()
+endif()
+
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/packages)
 add_custom_target(packages)
 
@@ -254,12 +372,15 @@ function(print_components)
   message(STATUS "Build Python Bindings:                ${WITH_PYTHON_BINDING}")
   message(STATUS "Build Java Bindings:                  ${WITH_JAVA_BINDING}")
   message(STATUS "Build Go bindings:                    ${WITH_GO_BINDING}")
+  message(STATUS "Build Swift bindings:                 ${WITH_SWIFT_BINDING}")
   message(STATUS "Build Ruby bindings:                  ${WITH_RUBY_BINDING}")
+  message(STATUS "Build Swift (depends on Swift):       ${WITH_SWIFT}")
   message(STATUS "Build Documentation (make html):      ${WITH_DOCUMENTATION}")
   message(STATUS "Build Python sdist (make package):    ${WITH_PYTHON_BINDING}")
   message(STATUS "Configure CTest (depends on Python):  ${WITH_PYTHON}")
-  message(STATUS "Build with RocksDB:                   ${WITH_ROCKSDB_EXPERIMENTAL}")
+  message(STATUS "Build with RocksDB:                   ${WITH_ROCKSDB}")
   message(STATUS "Build with AWS SDK:                   ${WITH_AWS_BACKUP}")
+  message(STATUS "Build with gRPC:                      ${WITH_GRPC}")
   message(STATUS "=========================================")
 endfunction()
 

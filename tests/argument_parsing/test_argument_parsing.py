@@ -4,7 +4,7 @@
 #
 # This source file is part of the FoundationDB open source project
 #
-# Copyright 2013-2021 Apple Inc. and the FoundationDB project authors
+# Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -98,6 +98,11 @@ def test_fdbbackup(build_dir):
     check(not is_unknown_knob(run_command(command, ["--knob-min_trace_severity", "5"])))
     check(not is_unknown_knob(run_command(command, ["--knob_min_trace_severity", "5"])))
     check(not is_unknown_knob(run_command(command, ["--knob_min-trace-severity", "5"])))
+
+    start_command = [args.build_dir + "/bin/fdbbackup", "start"]
+    check(
+        "--initial-snapshot-interval DURATION" in run_command(start_command, ["--help"])
+    )
 
 
 if __name__ == "__main__":

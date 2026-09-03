@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ struct Tuple {
 		bool operator==(const UserTypeStr& other) const { return (code == other.code && str == other.str); }
 	};
 
-	Tuple() {}
+	Tuple() = default;
 
 	// Tuple parsing normally does not care of the final value is a numeric type and is incomplete.
 	// The exclude_incomplete will exclude such incomplete final numeric tuples from the result.
@@ -121,7 +121,7 @@ struct Tuple {
 	}
 
 private:
-	Tuple(const StringRef& data, bool exclude_incomplete = false, bool exclude_user_type = false);
+	explicit Tuple(const StringRef& data, bool exclude_incomplete = false, bool exclude_user_type = false);
 	Standalone<VectorRef<uint8_t>> data;
 	std::vector<size_t> offsets;
 };

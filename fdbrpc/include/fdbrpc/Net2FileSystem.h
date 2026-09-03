@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #ifndef FLOW_NET2FILESYSTEM_H
 #define FLOW_NET2FILESYSTEM_H
 #include <string>
+#include <vector>
 #pragma once
 
 #include "flow/IAsyncFile.h"
@@ -46,14 +47,16 @@ public:
 	// void init();
 	static void stop();
 
-	Net2FileSystem(double ioTimeout = 0.0, const std::string& fileSystemPath = "");
+	explicit Net2FileSystem(double ioTimeout = 0.0, const std::vector<std::string>& fileSystemPaths = {});
+	Net2FileSystem(double ioTimeout, const std::string& fileSystemPath);
 
-	~Net2FileSystem() override {}
+	~Net2FileSystem() override = default;
 
-	static void newFileSystem(double ioTimeout = 0.0, const std::string& fileSystemPath = "");
+	static void newFileSystem(double ioTimeout = 0.0, const std::vector<std::string>& fileSystemPaths = {});
+	static void newFileSystem(double ioTimeout, const std::string& fileSystemPath);
 
 #ifdef __linux__
-	dev_t fileSystemDeviceId;
+	std::vector<dev_t> fileSystemDeviceIds;
 	bool checkFileSystem;
 #endif
 #ifdef ENABLE_SAMPLING

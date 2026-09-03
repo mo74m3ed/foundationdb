@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ boost::asio::ip::basic_endpoint<Protocol> toEndpoint(NetworkAddress const n) {
 }
 
 struct FluentDSocket {
-	virtual ~FluentDSocket() {}
+	virtual ~FluentDSocket() = default;
 	virtual void connect(NetworkAddress const& endpoint) = 0;
 	virtual void send(std::shared_ptr<Sample> const& sample) = 0;
 	virtual const boost::system::error_code& failed() const = 0;
@@ -124,7 +124,7 @@ public:
 	}
 };
 
-// Sample function to make instanciation of SampleSender easier
+// Sample function to make instantiation of SampleSender easier
 template <class Protocol, class Callback>
 std::shared_ptr<SampleSender<Protocol, Callback>> makeSampleSender(typename Protocol::socket& socket,
                                                                    Callback const& callback,
@@ -137,7 +137,7 @@ struct FluentDSocketImpl : FluentDSocket, std::enable_shared_from_this<FluentDSo
 	static constexpr unsigned MAX_QUEUE_SIZE = 100;
 	boost::asio::io_context& context;
 	typename Protocol::socket socket;
-	FluentDSocketImpl(boost::asio::io_context& context) : context(context), socket(context) {}
+	explicit FluentDSocketImpl(boost::asio::io_context& context) : context(context), socket(context) {}
 	bool ready = false;
 	std::deque<std::shared_ptr<Sample>> queue;
 	boost::system::error_code _failed;

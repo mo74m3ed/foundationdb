@@ -1,8 +1,7 @@
 [configuration]
 extraDatabaseMode = "Local"
-disableEncryption = true
-# In 7.2, DR is not supported in required tenant mode
-allowDefaultTenant = false
+encryptModes = ['disabled']
+tenantModes = ['disabled']
 
 [[test]]
 testTitle = "DrUpgrade"
@@ -14,7 +13,6 @@ simBackupAgents = "BackupToDB"
     nodeCount = 30000
     transactionsPerSecond = 1000.0
     testDuration = 30.0
-    expectedRate = 0
 
     [[test.workload]]
     testName = "BackupToDBUpgrade"

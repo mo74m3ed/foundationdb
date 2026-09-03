@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,9 +28,9 @@ inline ValueRef doLittleEndianAdd(const Optional<ValueRef>& existingValueOptiona
                                   const ValueRef& otherOperand,
                                   Arena& ar) {
 	const ValueRef& existingValue = existingValueOptional.present() ? existingValueOptional.get() : StringRef();
-	if (!existingValue.size())
+	if (existingValue.empty())
 		return otherOperand;
-	if (!otherOperand.size())
+	if (otherOperand.empty())
 		return otherOperand;
 
 	uint8_t* buf = new (ar) uint8_t[otherOperand.size()];
@@ -53,7 +53,7 @@ inline ValueRef doLittleEndianAdd(const Optional<ValueRef>& existingValueOptiona
 
 inline ValueRef doAnd(const Optional<ValueRef>& existingValueOptional, const ValueRef& otherOperand, Arena& ar) {
 	const ValueRef& existingValue = existingValueOptional.present() ? existingValueOptional.get() : StringRef();
-	if (!otherOperand.size())
+	if (otherOperand.empty())
 		return otherOperand;
 
 	uint8_t* buf = new (ar) uint8_t[otherOperand.size()];
@@ -76,9 +76,9 @@ inline ValueRef doAndV2(const Optional<ValueRef>& existingValueOptional, const V
 
 inline ValueRef doOr(const Optional<ValueRef>& existingValueOptional, const ValueRef& otherOperand, Arena& ar) {
 	const ValueRef& existingValue = existingValueOptional.present() ? existingValueOptional.get() : StringRef();
-	if (!existingValue.size())
+	if (existingValue.empty())
 		return otherOperand;
-	if (!otherOperand.size())
+	if (otherOperand.empty())
 		return otherOperand;
 
 	uint8_t* buf = new (ar) uint8_t[otherOperand.size()];
@@ -94,9 +94,9 @@ inline ValueRef doOr(const Optional<ValueRef>& existingValueOptional, const Valu
 
 inline ValueRef doXor(const Optional<ValueRef>& existingValueOptional, const ValueRef& otherOperand, Arena& ar) {
 	const ValueRef& existingValue = existingValueOptional.present() ? existingValueOptional.get() : StringRef();
-	if (!existingValue.size())
+	if (existingValue.empty())
 		return otherOperand;
-	if (!otherOperand.size())
+	if (otherOperand.empty())
 		return otherOperand;
 
 	uint8_t* buf = new (ar) uint8_t[otherOperand.size()];
@@ -115,9 +115,9 @@ inline ValueRef doAppendIfFits(const Optional<ValueRef>& existingValueOptional,
                                const ValueRef& otherOperand,
                                Arena& ar) {
 	const ValueRef& existingValue = existingValueOptional.present() ? existingValueOptional.get() : StringRef();
-	if (!existingValue.size())
+	if (existingValue.empty())
 		return otherOperand;
-	if (!otherOperand.size())
+	if (otherOperand.empty())
 		return existingValue;
 	if (existingValue.size() + otherOperand.size() > CLIENT_KNOBS->VALUE_SIZE_LIMIT) {
 		CODE_PROBE(true, "AppendIfFits resulted in truncation");
@@ -138,9 +138,9 @@ inline ValueRef doAppendIfFits(const Optional<ValueRef>& existingValueOptional,
 
 inline ValueRef doMax(const Optional<ValueRef>& existingValueOptional, const ValueRef& otherOperand, Arena& ar) {
 	const ValueRef& existingValue = existingValueOptional.present() ? existingValueOptional.get() : StringRef();
-	if (!existingValue.size())
+	if (existingValue.empty())
 		return otherOperand;
-	if (!otherOperand.size())
+	if (otherOperand.empty())
 		return otherOperand;
 
 	int i, j;
@@ -181,7 +181,7 @@ inline ValueRef doByteMax(const Optional<ValueRef>& existingValueOptional, const
 }
 
 inline ValueRef doMin(const Optional<ValueRef>& existingValueOptional, const ValueRef& otherOperand, Arena& ar) {
-	if (!otherOperand.size())
+	if (otherOperand.empty())
 		return otherOperand;
 
 	const ValueRef& existingValue = existingValueOptional.present() ? existingValueOptional.get() : StringRef();
@@ -265,7 +265,10 @@ inline int32_t parseVersionstampOffset(StringRef& key) {
 /*
  * Returns the range corresponding to the specified versionstamp key.
  */
-inline KeyRangeRef getVersionstampKeyRange(Arena& arena, const KeyRef& key, Version minVersion, const KeyRef& maxKey) {
+inline KeyRangeRef getVersionstampKeyRange(Arena& arena,
+                                           const KeyRef& key,
+                                           Optional<Version> readVersion,
+                                           const KeyRef& maxKey) {
 	KeyRef begin(arena, key);
 	KeyRef end(arena, key);
 
@@ -280,7 +283,7 @@ inline KeyRangeRef getVersionstampKeyRange(Arena& arena, const KeyRef& key, Vers
 	if (pos < 0 || pos + 10 > begin.size())
 		throw client_invalid_operation();
 
-	placeVersionstamp(mutateString(begin) + pos, minVersion, 0);
+	placeVersionstamp(mutateString(begin) + pos, readVersion.map([](Version v) { return v + 1; }).orDefault(0), 0);
 	memset(mutateString(end) + pos, '\xff', 10);
 
 	return KeyRangeRef(begin, std::min(end, maxKey));
@@ -298,9 +301,10 @@ inline void transformVersionstampKey(StringRef& key, Version version, uint16_t t
 }
 
 inline void transformVersionstampMutation(MutationRef& mutation,
-                                          StringRef MutationRef::*param,
+                                          StringRef MutationRef::* param,
                                           Version version,
                                           uint16_t transactionNumber) {
+	mutation.clearChecksumAndAccumulativeIndex();
 	if ((mutation.*param).size() >= 4) {
 		int32_t pos = parseVersionstampOffset(mutation.*param);
 		mutation.*param = (mutation.*param).substr(0, (mutation.*param).size() - 4);

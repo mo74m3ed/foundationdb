@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import sys
 import shutil
 import os
 import subprocess
@@ -120,76 +119,6 @@ def maintenance(logger):
 
 
 @enable_logging()
-def quota(logger):
-    # Should be a noop
-    command = "quota clear green"
-    output = run_fdbcli_command(command)
-    logger.debug(command + " : " + output)
-    assert output == "Successfully cleared quota."
-
-    command = "quota get green total_throughput"
-    output = run_fdbcli_command(command)
-    logger.debug(command + " : " + output)
-    assert output == "<empty>"
-
-    # Ignored update
-    command = "quota set red total_throughput 49152"
-    output = run_fdbcli_command(command)
-    logger.debug(command + " : " + output)
-    assert output == "Successfully updated quota."
-
-    command = "quota set green total_throughput 32768"
-    output = run_fdbcli_command(command)
-    logger.debug(command + " : " + output)
-    assert output == "Successfully updated quota."
-
-    command = "quota set green reserved_throughput 16384"
-    output = run_fdbcli_command(command)
-    logger.debug(command + " : " + output)
-    assert output == "Successfully updated quota."
-
-    command = "quota set green storage 98765"
-    output = run_fdbcli_command(command)
-    logger.debug(command + " : " + output)
-    assert output == "Successfully updated quota."
-
-    command = "quota get green total_throughput"
-    output = run_fdbcli_command(command)
-    logger.debug(command + " : " + output)
-    assert output == "32768"
-
-    command = "quota get green reserved_throughput"
-    output = run_fdbcli_command(command)
-    logger.debug(command + " : " + output)
-    assert output == "16384"
-
-    command = "quota get green storage"
-    output = run_fdbcli_command(command)
-    logger.debug(command + " : " + output)
-    assert output == "98765"
-
-    command = "quota clear green"
-    output = run_fdbcli_command(command)
-    logger.debug(command + " : " + output)
-    assert output == "Successfully cleared quota."
-
-    command = "quota get green total_throughput"
-    output = run_fdbcli_command(command)
-    logger.debug(command + " : " + output)
-    assert output == "<empty>"
-
-    command = "quota get green storage"
-    output = run_fdbcli_command(command)
-    logger.debug(command + " : " + output)
-    assert output == "<empty>"
-
-    # Too few arguments, should log help message
-    command = "quota get green"
-    output = run_fdbcli_command(command)
-    logger.debug(command + " : " + output)
-
-
-@enable_logging()
 def setclass(logger):
     # get all processes' network addresses
     output1 = run_fdbcli_command("setclass")
@@ -226,7 +155,6 @@ def setclass(logger):
         "data_distributor",
         "coordinator",
         "ratekeeper",
-        "storage_cache",
         "backup",
     ]
     random_class_type = random.choice(class_types)
@@ -286,7 +214,7 @@ def lockAndUnlock(logger):
         env=fdbcli_env,
     )
     process.stdout.readline()
-    # The randome passphrease we need to confirm to proceed the unlocking
+    # The random passphrase we need to confirm to proceed the unlocking
     line2 = process.stdout.readline()
     logger.debug("Random passphrase: {}".format(line2))
     output3, err = process.communicate(input=line2)
@@ -380,7 +308,7 @@ def suspend(logger):
     port = address.split(":")[1]
     logger.debug("Port: {}".format(port))
     # use the port number to find the exact fdb process we are connecting to
-    # child process like fdbserver -r flowprocess does not provide `datadir` in the command line
+    # auxiliary processes may not provide `datadir` in the command line
     pinfo = list(filter(lambda x: port in x and "datadir" in x, pinfos))
     assert len(pinfo) == 1
     pid = pinfo[0].split(" ")[0]
@@ -457,7 +385,7 @@ def versionepoch(logger):
     version11 = run_fdbcli_command("versionepoch commit")
     assert version11.startswith("Current read version is ")
     # the test can trigger recovery, thus we wait until the recovery is finished to move to the next test
-    wait_for_database_available(logger)
+    wait_for_database_fully_recovered(logger)
 
 
 def get_value_from_status_json(retry, *args):
@@ -472,6 +400,64 @@ def get_value_from_status_json(retry, *args):
     return result
 
 
+def status_json_file_region_failover_message():
+    status_json = {
+        "client": {
+            "cluster_file": {"path": "fdb.cluster", "up_to_date": True},
+            "coordinators": {"coordinators": [], "quorum_reachable": True},
+            "database_status": {"available": True, "healthy": False},
+            "messages": [],
+            "timestamp": 1417807090,
+        },
+        "cluster": {
+            "configuration": {
+                "redundancy_mode": "three_data_hall",
+                "storage_engine": "ssd-2",
+                "coordinators_count": 3,
+                "excluded_servers": [],
+            },
+            "data": {"state": {"name": "healthy", "healthy": True}},
+            "fault_tolerance": {
+                "max_zone_failures_without_losing_availability": -1,
+                "max_zone_failures_without_losing_data": -1,
+            },
+            "logs": [
+                {
+                    "epoch": 1,
+                    "current": True,
+                    "begin_version": 1,
+                    "possibly_losing_data": False,
+                    "log_interfaces": [
+                        {
+                            "id": "aaaaaaaaaaaaaaaa",
+                            "healthy": False,
+                            "address": "1.1.1.1:4500",
+                        }
+                    ],
+                }
+            ],
+            "machines": {},
+            "processes": {},
+        },
+    }
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as status_file:
+        json.dump(status_json, status_file)
+        status_file.flush()
+        result = subprocess.run(
+            [command_template[0], "--status-from-json", status_file.name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=fdbcli_env,
+        )
+
+    stdout = result.stdout.decode("utf-8")
+    stderr = result.stderr.decode("utf-8")
+    assert result.returncode == 0, stderr
+    assert "Warning: the database may have availability loss." in stdout
+    assert "may have data loss" not in stdout
+
+
 @enable_logging()
 def consistencycheck(logger):
     consistency_check_on_output = "ConsistencyCheck is on"
@@ -484,76 +470,6 @@ def consistencycheck(logger):
     run_fdbcli_command("consistencycheck", "on")
     output3 = run_fdbcli_command("consistencycheck")
     assert output3 == consistency_check_on_output
-
-
-@enable_logging()
-def knobmanagement(logger):
-    # this test will set knobs and verify that the knobs are properly set
-    # must use begin/commit to avoid prompt for description
-
-    # Incorrect arguments
-    output = run_fdbcli_command("setknob")
-    assert output == "Usage: setknob <KEY> <VALUE> [CONFIG_CLASS]"
-    output = run_fdbcli_command("setknob", "min_trace_severity")
-    assert output == "Usage: setknob <KEY> <VALUE> [CONFIG_CLASS]"
-    output = run_fdbcli_command("getknob")
-    assert output == "Usage: getknob <KEY> [CONFIG_CLASS]"
-    logger.debug("incorrect args passed")
-
-    # Invalid knob name
-    err = run_fdbcli_command_and_get_error(
-        'begin; setknob dummy_knob 20; commit "fdbcli change";'
-    )
-    logger.debug("err is: {}".format(err))
-    assert len(err) > 0
-    logger.debug("invalid knob name passed")
-
-    # Invalid type for knob
-    err = run_fdbcli_command_and_get_error(
-        'begin; setknob min_trace_severity dummy-text; commit "fdbcli change";'
-    )
-    logger.debug("err is: {}".format(err))
-    assert len(err) > 0
-    logger.debug("invalid knob type passed")
-
-    # Verifying we can't do a normal set, clear, get, getrange, clearrange
-    # with a setknob
-    err = run_fdbcli_command_and_get_error(
-        "writemode on; begin; set foo bar; setknob max_metric_size 1000; commit;"
-    )
-    logger.debug("err is: {}".format(err))
-    assert len(err) > 0
-
-    err = run_fdbcli_command_and_get_error(
-        "writemode on; begin; clear foo; setknob max_metric_size 1000; commit"
-    )
-    logger.debug("err is: {}".format(err))
-    assert len(err) > 0
-
-    # Various setknobs and verified by getknob
-    output = run_fdbcli_command(
-        'begin; setknob min_trace_severity 30; setknob max_metric_size 1000; \
-                                setknob tracing_udp_listener_addr 192.168.0.1;                       \
-                                setknob tracing_sample_rate 0.3;                                     \
-                                commit "This is an fdbcli test for knobs";'
-    )
-    assert "Committed" in output
-    output = run_fdbcli_command("getknob", "min_trace_severity")
-    assert r"`min_trace_severity' is `30'" == output
-    output = run_fdbcli_command("getknob", "max_metric_size")
-    assert r"`max_metric_size' is `1000'" == output
-    output = run_fdbcli_command("getknob", "tracing_udp_listener_addr")
-    assert r"`tracing_udp_listener_addr' is `'192.168.0.1''" == output
-    output = run_fdbcli_command("getknob", "tracing_sample_rate")
-    assert r"`tracing_sample_rate' is `0.300000'" == output
-
-
-@enable_logging()
-def cache_range(logger):
-    # this command is currently experimental
-    # just test we can set and clear the cached range
-    run_fdbcli_command("cache_range", "set", "a", "b")
-    run_fdbcli_command("cache_range", "clear", "a", "b")
 
 
 @enable_logging()
@@ -672,6 +588,60 @@ def transaction(logger):
     assert output7 == "`key': not found"
 
 
+@enable_logging()
+def clearrange_prefix(logger):
+    """This test covers the clearrange fdbcli command with optional ENDKEY (prefix mode)."""
+    # Test 1: clearrange without writemode should fail
+    err1 = run_fdbcli_command_and_get_error("clearrange", "prefix")
+    assert (
+        err1 == "ERROR: writemode must be enabled to set or clear keys in the database."
+    )
+    # Test 2: set keys with a shared prefix and one without, then clearrange with prefix only
+    process = subprocess.Popen(
+        command_template[:-1],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        env=fdbcli_env,
+    )
+    transaction_flow = [
+        "writemode on",
+        "set prefix_aaa val1",
+        "set prefix_bbb val2",
+        "set prefix_ccc val3",
+        "set other_key val4",
+        "clearrange prefix_",
+        # verify prefix keys are gone
+        "get prefix_aaa",
+        "get prefix_bbb",
+        "get prefix_ccc",
+        # verify non-prefix key is still present
+        "get other_key",
+    ]
+    output1, _ = process.communicate(input="\n".join(transaction_flow).encode())
+    lines = list(filter(len, output1.decode().split("\n")))
+    logger.debug("Output lines: {}".format(lines))
+    # Find the get results (last 4 meaningful lines before the prompt)
+    get_results = [l for l in lines if "not found" in l or "is `" in l]
+    logger.debug("Get results: {}".format(get_results))
+    assert len(get_results) == 4
+    assert get_results[0] == "`prefix_aaa': not found"
+    assert get_results[1] == "`prefix_bbb': not found"
+    assert get_results[2] == "`prefix_ccc': not found"
+    assert get_results[3] == "`other_key' is `val4'"
+    # Cleanup: remove the remaining key
+    process = subprocess.Popen(
+        command_template[:-1],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        env=fdbcli_env,
+    )
+    cleanup_flow = [
+        "writemode on",
+        "clear other_key",
+    ]
+    process.communicate(input="\n".join(cleanup_flow).encode())
+
+
 def get_fdb_process_addresses(logger):
     # get all processes' network addresses
     output = run_fdbcli_command("kill")
@@ -718,7 +688,7 @@ def coordinators(logger):
         len(get_value_from_status_json(True, "client", "coordinators", "coordinators"))
         == 1
     )
-    wait_for_database_available(logger)
+    wait_for_database_fully_recovered(logger)
 
 
 @enable_logging(logging.DEBUG)
@@ -781,7 +751,7 @@ def exclude(logger):
     # check the include is successful
     output4 = run_fdbcli_command("exclude")
     assert no_excluded_process_output in output4
-    wait_for_database_available(logger)
+    wait_for_database_fully_recovered(logger)
 
 
 # read the system key 'k', need to enable the option first
@@ -816,13 +786,20 @@ def throttle(logger):
     # TODO : test manual throttling, not easy to do now
 
 
-def wait_for_database_available(logger):
-    # sometimes the change takes some time to have effect and the database can be unavailable at that time
-    # this is to wait until the database is available again
-    while not get_value_from_status_json(
-        True, "client", "database_status", "available"
-    ):
-        logger.debug("Database unavailable for now, wait for one second")
+def wait_for_database_fully_recovered(logger):
+    # Database availability precedes full recovery and is not sufficient before tests that
+    # make assertions about recovery generations.
+    while True:
+        status = json.loads(run_fdbcli_command("status", "json"))
+        available = status["client"]["database_status"]["available"]
+        recovery_state = status.get("cluster", {}).get("recovery_state", {}).get("name")
+        if available and recovery_state == "fully_recovered":
+            return
+        logger.debug(
+            "Database available: {}, recovery state: {}; wait for one second".format(
+                available, recovery_state
+            )
+        )
         time.sleep(1)
 
 
@@ -878,544 +855,6 @@ def triggerddteaminfolog(logger):
     assert output == "Triggered team info logging in data distribution."
 
 
-def setup_tenants(tenants):
-    command = "; ".join(["tenant create %s" % t for t in tenants])
-    run_fdbcli_command(command)
-
-
-def clear_database_and_tenants():
-    run_fdbcli_command(
-        'writemode on; option on SPECIAL_KEY_SPACE_ENABLE_WRITES; clearrange "" \\xff; clearrange \\xff\\xff/management/tenant/map/ \\xff\\xff/management/tenant/map0'
-    )
-
-
-def run_tenant_test(test_func):
-    test_func()
-    clear_database_and_tenants()
-
-
-@enable_logging()
-def tenant_create(logger):
-    output1 = run_fdbcli_command("tenant create tenant")
-    assert output1 == "The tenant `tenant' has been created"
-
-    output = run_fdbcli_command("tenant create tenant2 tenant_group=tenant_group2")
-    assert output == "The tenant `tenant2' has been created"
-
-    output = run_fdbcli_command_and_get_error("tenant create tenant")
-    assert output == "ERROR: A tenant with the given name already exists (2132)"
-
-
-@enable_logging()
-def tenant_delete(logger):
-    setup_tenants(["tenant", "tenant2"])
-    run_fdbcli_command("writemode on; usetenant tenant2; set tenant_test value")
-
-    # delete a tenant while the fdbcli is using that tenant
-    process = subprocess.Popen(
-        command_template[:-1],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=fdbcli_env,
-    )
-    cmd_sequence = [
-        "writemode on",
-        "usetenant tenant",
-        "tenant delete tenant",
-        "get tenant_test",
-        "defaulttenant",
-        "usetenant tenant",
-    ]
-    output, error_output = process.communicate(input="\n".join(cmd_sequence).encode())
-
-    lines = output.decode().strip().split("\n")[-6:]
-    error_lines = error_output.decode().strip().split("\n")[-2:]
-    assert lines[0] == "Using tenant `tenant'"
-    assert lines[1] == "The tenant `tenant' has been deleted"
-    assert (
-        lines[2]
-        == "WARNING: the active tenant was deleted. Use the `usetenant' or `defaulttenant'"
-    )
-    assert lines[3] == "command to choose a new tenant."
-    assert error_lines[0] == "ERROR: Tenant does not exist (2131)"
-    assert lines[5] == "Using the default tenant"
-    assert error_lines[1] == "ERROR: Tenant `tenant' does not exist"
-
-    # delete a non-empty tenant
-    process = subprocess.Popen(
-        command_template[:-1],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=fdbcli_env,
-    )
-    cmd_sequence = [
-        "writemode on",
-        "tenant delete tenant2",
-        "usetenant tenant2",
-        "clear tenant_test",
-        "defaulttenant",
-        "tenant delete tenant2",
-    ]
-    output, error_output = process.communicate(input="\n".join(cmd_sequence).encode())
-
-    lines = output.decode().strip().split("\n")[-4:]
-    error_lines = error_output.decode().strip().split("\n")[-1:]
-    assert error_lines[0] == "ERROR: Cannot delete a non-empty tenant (2133)"
-    assert lines[0] == "Using tenant `tenant2'"
-    assert lines[1].startswith("Committed")
-    assert lines[2] == "Using the default tenant"
-    assert lines[3] == "The tenant `tenant2' has been deleted"
-
-    # delete a non-existing tenant
-    output = run_fdbcli_command_and_get_error("tenant delete tenant")
-    assert output == "ERROR: Tenant does not exist (2131)"
-
-
-@enable_logging()
-def tenant_list(logger):
-    output = run_fdbcli_command("tenant list")
-    assert output == "The cluster has no tenants"
-
-    setup_tenants(["tenant", "tenant2"])
-
-    output = run_fdbcli_command("tenant list")
-    assert output == "1. tenant\n  2. tenant2"
-
-    output = run_fdbcli_command("tenant list a z limit=1")
-    assert output == "1. tenant"
-
-    output = run_fdbcli_command("tenant list a tenant2")
-    assert output == "1. tenant"
-
-    output = run_fdbcli_command("tenant list tenant2 z")
-    assert output == "1. tenant2"
-
-    output = run_fdbcli_command("tenant list a b")
-    assert output == "The cluster has no tenants in the specified range"
-
-    output = run_fdbcli_command_and_get_error("tenant list b a")
-    assert output == "ERROR: end must be larger than begin"
-
-    output = run_fdbcli_command_and_get_error("tenant list a b limit=12x")
-    assert output == "ERROR: invalid limit `12x'"
-
-    output = run_fdbcli_command_and_get_error("tenant list a b offset=13y")
-    assert output == "ERROR: invalid offset `13y'"
-
-    output = run_fdbcli_command_and_get_error("tenant list a b state=14z")
-    assert output == "ERROR: unrecognized tenant state(s) `14z'."
-
-
-@enable_logging()
-def tenant_lock(logger):
-    logger.debug("Create tenant")
-    setup_tenants(["tenant"])
-
-    logger.debug("Write test key")
-    run_fdbcli_command("usetenant tenant; writemode on; set foo bar")
-    logger.debug("Lock tenant in read-only mode")
-    output = run_fdbcli_command("tenant lock tenant w")
-    output = output.strip()
-    logger.debug("output: {}".format(output))
-    start_string = "Locked tenant `tenant' with UID `"
-    assert output.startswith(start_string)
-    assert output.endswith("'")
-    uid_str = output[len(start_string) : -1]
-    assert len(uid_str) == 32
-
-    logger.debug("Verify tenant is readable")
-    output = run_fdbcli_command("usetenant tenant; get foo").strip()
-    logger.debug("output: {}".format(output))
-    lines = output.split("\n")
-    assert lines[-1] == "`foo' is `bar'"
-
-    logger.debug("Verify tenant is NOT writeable")
-    output = run_fdbcli_command_and_get_error(
-        "usetenant tenant; writemode on; set foo bar2"
-    ).strip()
-    logger.debug("output: {}".format(output))
-    assert output == "ERROR: Tenant is locked (2144)"
-
-    logger.debug('Unlock tenant with UID "{}"'.format(uid_str))
-    output = run_fdbcli_command("tenant unlock tenant {}".format(uid_str))
-    logger.debug("output: {}".format(output.strip()))
-    assert output.strip() == "Unlocked tenant `tenant'"
-
-    logger.debug("Lock tenant in rw mode")
-    output = run_fdbcli_command("tenant lock tenant rw {}".format(uid_str)).strip()
-    logger.debug("output: {}".format(output))
-    assert output == "Locked tenant `tenant' with UID `{}'".format(uid_str)
-
-    logger.debug("Verify tenant is NOT readable")
-    output = run_fdbcli_command_and_get_error("usetenant tenant; get foo").strip()
-    logger.debug("output: {}".format(output))
-    assert output == "ERROR: Tenant is locked (2144)"
-
-    logger.debug("Verify tenant is NOT writeable")
-    output = run_fdbcli_command_and_get_error(
-        "usetenant tenant; writemode on; set foo bar2"
-    ).strip()
-    logger.debug("output: {}".format(output))
-    assert output == "ERROR: Tenant is locked (2144)"
-
-    logger.debug("Unlock tenant")
-    output = run_fdbcli_command("tenant unlock tenant {}".format(uid_str))
-    logger.debug("output: {}".format(output.strip()))
-    assert output.strip() == "Unlocked tenant `tenant'"
-
-
-@enable_logging()
-def tenant_get(logger):
-    setup_tenants(["tenant", "tenant2 tenant_group=tenant_group2"])
-
-    output = run_fdbcli_command("tenant get tenant")
-    lines = output.split("\n")
-    assert len(lines) == 4
-    assert lines[0].strip().startswith("id: ")
-    assert lines[1].strip().startswith("prefix: ")
-    assert lines[2].strip().startswith("name: ")
-    assert lines[3].strip() == "lock state: unlocked"
-    # id = lines[0].strip().removeprefix("id: ")
-    # Workaround until Python 3.9+ for removeprefix
-    id = lines[0].strip()[len("id: ") :]
-
-    id_output = run_fdbcli_command("tenant getId {}".format(id))
-    assert id_output == output
-
-    output = run_fdbcli_command("tenant get tenant JSON")
-    json_output = json.loads(output, strict=False)
-    assert len(json_output) == 2
-    assert "tenant" in json_output
-    assert json_output["type"] == "success"
-    assert len(json_output["tenant"]) == 4
-    assert "id" in json_output["tenant"]
-    assert "name" in json_output["tenant"]
-    assert len(json_output["tenant"]["name"]) == 2
-    assert "base64" in json_output["tenant"]["name"]
-    assert "printable" in json_output["tenant"]["name"]
-    assert "prefix" in json_output["tenant"]
-    assert len(json_output["tenant"]["prefix"]) == 2
-    assert "base64" in json_output["tenant"]["prefix"]
-    assert "printable" in json_output["tenant"]["prefix"]
-    assert "lock_state" in json_output["tenant"]
-    assert json_output["tenant"]["lock_state"] == "unlocked"
-
-    id_output = run_fdbcli_command("tenant getId {} JSON".format(id))
-    assert id_output == output
-
-    output = run_fdbcli_command("tenant get tenant2")
-    lines = output.split("\n")
-    assert len(lines) == 5
-    assert lines[0].strip().startswith("id: ")
-    assert lines[1].strip().startswith("prefix: ")
-    assert lines[2].strip().startswith("name: ")
-    assert lines[3].strip() == "lock state: unlocked"
-    assert lines[4].strip() == "tenant group: tenant_group2"
-    # id2 = lines[0].strip().removeprefix("id: ")
-    # Workaround until Python 3.9+ for removeprefix
-    id2 = lines[0].strip()[len("id: ") :]
-
-    id_output = run_fdbcli_command("tenant getId {}".format(id2))
-    assert id_output == output
-
-    output = run_fdbcli_command("tenant get tenant2 JSON")
-    json_output = json.loads(output, strict=False)
-    assert len(json_output) == 2
-    assert "tenant" in json_output
-    assert json_output["type"] == "success"
-    assert len(json_output["tenant"]) == 5
-    assert "id" in json_output["tenant"]
-    assert "name" in json_output["tenant"]
-    assert len(json_output["tenant"]["name"]) == 2
-    assert "base64" in json_output["tenant"]["name"]
-    assert "printable" in json_output["tenant"]["name"]
-    assert "prefix" in json_output["tenant"]
-    assert "lock_state" in json_output["tenant"]
-    assert json_output["tenant"]["lock_state"] == "unlocked"
-    assert "tenant_group" in json_output["tenant"]
-    assert len(json_output["tenant"]["tenant_group"]) == 2
-    assert "base64" in json_output["tenant"]["tenant_group"]
-    assert json_output["tenant"]["tenant_group"]["printable"] == "tenant_group2"
-
-    id_output = run_fdbcli_command("tenant getId {} JSON".format(id2))
-    assert id_output == output
-
-
-@enable_logging()
-def tenant_configure(logger):
-    setup_tenants(["tenant"])
-
-    output = run_fdbcli_command("tenant configure tenant tenant_group=tenant_group1")
-    assert output == "The configuration for tenant `tenant' has been updated"
-
-    output = run_fdbcli_command(
-        "tenant configure tenant tenant_group=tenant_group1 ignore_capacity_limit"
-    )
-    assert output == "The configuration for tenant `tenant' has been updated"
-
-    output = run_fdbcli_command("tenant get tenant")
-    lines = output.split("\n")
-    assert len(lines) == 5
-    assert lines[4].strip() == "tenant group: tenant_group1"
-
-    output = run_fdbcli_command("tenant configure tenant unset tenant_group")
-    assert output == "The configuration for tenant `tenant' has been updated"
-
-    output = run_fdbcli_command(
-        "tenant configure tenant unset tenant_group ignore_capacity_limit"
-    )
-    assert output == "The configuration for tenant `tenant' has been updated"
-
-    output = run_fdbcli_command("tenant get tenant")
-    lines = output.split("\n")
-    assert len(lines) == 4
-
-    output = run_fdbcli_command_and_get_error(
-        "tenant configure tenant tenant_group=tenant_group1 tenant_group=tenant_group2"
-    )
-    assert (
-        output
-        == "ERROR: configuration parameter `tenant_group' specified more than once."
-    )
-
-    output = run_fdbcli_command_and_get_error("tenant configure tenant unset")
-    assert output == "ERROR: `unset' specified without a configuration parameter."
-
-    output = run_fdbcli_command_and_get_error(
-        "tenant configure tenant unset tenant_group=tenant_group1"
-    )
-    assert (
-        output
-        == "ERROR: unrecognized configuration parameter `tenant_group=tenant_group1'."
-    )
-
-    output = run_fdbcli_command_and_get_error("tenant configure tenant tenant_group")
-    assert (
-        output
-        == "ERROR: invalid configuration string `tenant_group'. String must specify a value using `='."
-    )
-
-    output = run_fdbcli_command_and_get_error(
-        "tenant configure tenant tenant_group=tenant1 unknown_token"
-    )
-    assert (
-        output
-        == "ERROR: invalid configuration string `unknown_token'. String must specify a value using `='."
-    )
-
-    output = run_fdbcli_command_and_get_error(
-        "tenant configure tenant3 tenant_group=tenant_group1"
-    )
-    assert output == "ERROR: Tenant does not exist (2131)"
-
-    expected_output = """
-ERROR: assigned_cluster is only valid in metacluster configuration.
-ERROR: Tenant configuration is invalid (2140)
-    """.strip()
-    output = run_fdbcli_command_and_get_error(
-        "tenant configure tenant assigned_cluster=nonexist"
-    )
-    assert output == expected_output
-
-
-@enable_logging()
-def tenant_rename(logger):
-    setup_tenants(["tenant", "tenant2"])
-
-    output = run_fdbcli_command("tenant rename tenant tenant3")
-    assert output == "The tenant `tenant' has been renamed to `tenant3'"
-
-    output = run_fdbcli_command_and_get_error("tenant rename tenant tenant4")
-    assert output == "ERROR: Tenant does not exist (2131)"
-
-    output = run_fdbcli_command_and_get_error("tenant rename tenant2 tenant3")
-    assert output == "ERROR: A tenant with the given name already exists (2132)"
-
-
-@enable_logging()
-def tenant_usetenant(logger):
-    setup_tenants(["tenant", "tenant2"])
-
-    output = run_fdbcli_command("usetenant")
-    assert output == "Using the default tenant"
-
-    output = run_fdbcli_command_and_get_error("usetenant tenant3")
-    assert output == "ERROR: Tenant `tenant3' does not exist"
-
-    # Test writing keys to different tenants and make sure they all work correctly
-    run_fdbcli_command("writemode on; set tenant_test default_tenant")
-    output = run_fdbcli_command("get tenant_test")
-    assert output == "`tenant_test' is `default_tenant'"
-
-    process = subprocess.Popen(
-        command_template[:-1],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        env=fdbcli_env,
-    )
-    cmd_sequence = [
-        "writemode on",
-        "usetenant tenant",
-        "get tenant_test",
-        "set tenant_test tenant",
-    ]
-    output, _ = process.communicate(input="\n".join(cmd_sequence).encode())
-
-    lines = output.decode().strip().split("\n")[-3:]
-    assert lines[0] == "Using tenant `tenant'"
-    assert lines[1] == "`tenant_test': not found"
-    assert lines[2].startswith("Committed")
-
-    process = subprocess.Popen(
-        command_template[:-1],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        env=fdbcli_env,
-    )
-    cmd_sequence = [
-        "writemode on",
-        "usetenant tenant2",
-        "get tenant_test",
-        "set tenant_test tenant2",
-        "get tenant_test",
-    ]
-    output, _ = process.communicate(input="\n".join(cmd_sequence).encode())
-
-    lines = output.decode().strip().split("\n")[-4:]
-    assert lines[0] == "Using tenant `tenant2'"
-    assert lines[1] == "`tenant_test': not found"
-    assert lines[2].startswith("Committed")
-    assert lines[3] == "`tenant_test' is `tenant2'"
-
-    process = subprocess.Popen(
-        command_template[:-1],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        env=fdbcli_env,
-    )
-    cmd_sequence = [
-        "usetenant tenant",
-        "get tenant_test",
-        "usetenant tenant2",
-        "get tenant_test",
-        "defaulttenant",
-        "get tenant_test",
-    ]
-    output, _ = process.communicate(input="\n".join(cmd_sequence).encode())
-
-    lines = output.decode().strip().split("\n")[-6:]
-    assert lines[0] == "Using tenant `tenant'"
-    assert lines[1] == "`tenant_test' is `tenant'"
-    assert lines[2] == "Using tenant `tenant2'"
-    assert lines[3] == "`tenant_test' is `tenant2'"
-    assert lines[4] == "Using the default tenant"
-    assert lines[5] == "`tenant_test' is `default_tenant'"
-
-
-@enable_logging()
-def tenant_old_commands(logger):
-    create_output = run_fdbcli_command("tenant create tenant")
-    list_output = run_fdbcli_command("tenant list")
-    get_output = run_fdbcli_command("tenant get tenant")
-    # Run the gettenant command here because the ID will be different in the second block
-    get_output_old = run_fdbcli_command("gettenant tenant")
-    configure_output = run_fdbcli_command(
-        "tenant configure tenant tenant_group=tenant_group1"
-    )
-    rename_output = run_fdbcli_command("tenant rename tenant tenant2")
-    delete_output = run_fdbcli_command("tenant delete tenant2")
-
-    create_output_old = run_fdbcli_command("createtenant tenant")
-    list_output_old = run_fdbcli_command("listtenants")
-    configure_output_old = run_fdbcli_command(
-        "configuretenant tenant tenant_group=tenant_group1"
-    )
-    rename_output_old = run_fdbcli_command("renametenant tenant tenant2")
-    delete_output_old = run_fdbcli_command("deletetenant tenant2")
-
-    assert create_output == create_output_old
-    assert list_output == list_output_old
-    assert get_output == get_output_old
-    assert configure_output == configure_output_old
-    assert rename_output == rename_output_old
-    assert delete_output == delete_output_old
-
-
-@enable_logging()
-def tenant_group_list(logger):
-    output = run_fdbcli_command("tenantgroup list")
-    assert output == "The cluster has no tenant groups"
-
-    setup_tenants(
-        [
-            "tenant",
-            "tenant2 tenant_group=tenant_group2",
-            "tenant3 tenant_group=tenant_group3",
-        ]
-    )
-
-    output = run_fdbcli_command("tenantgroup list")
-    assert output == "1. tenant_group2\n  2. tenant_group3"
-
-    output = run_fdbcli_command("tenantgroup list a z 1")
-    assert output == "1. tenant_group2"
-
-    output = run_fdbcli_command("tenantgroup list a tenant_group3")
-    assert output == "1. tenant_group2"
-
-    output = run_fdbcli_command("tenantgroup list tenant_group3 z")
-    assert output == "1. tenant_group3"
-
-    output = run_fdbcli_command("tenantgroup list a b")
-    assert output == "The cluster has no tenant groups in the specified range"
-
-    output = run_fdbcli_command_and_get_error("tenantgroup list b a")
-    assert output == "ERROR: end must be larger than begin"
-
-    output = run_fdbcli_command_and_get_error("tenantgroup list a b 12x")
-    assert output == "ERROR: invalid limit `12x'"
-
-
-@enable_logging()
-def tenant_group_get(logger):
-    setup_tenants(["tenant tenant_group=tenant_group"])
-
-    output = run_fdbcli_command("tenantgroup get tenant_group")
-    assert output == "The tenant group is present in the cluster"
-
-    output = run_fdbcli_command("tenantgroup get tenant_group JSON")
-    json_output = json.loads(output, strict=False)
-    assert len(json_output) == 2
-    assert "tenant_group" in json_output
-    assert json_output["type"] == "success"
-    assert len(json_output["tenant_group"]) == 0
-
-    output = run_fdbcli_command_and_get_error("tenantgroup get tenant_group2")
-    assert output == "ERROR: tenant group not found"
-
-    output = run_fdbcli_command("tenantgroup get tenant_group2 JSON")
-    json_output = json.loads(output, strict=False)
-    assert len(json_output) == 2
-    assert json_output["type"] == "error"
-    assert json_output["error"] == "tenant group not found"
-
-
-def tenants():
-    run_tenant_test(tenant_create)
-    run_tenant_test(tenant_delete)
-    run_tenant_test(tenant_list)
-    run_tenant_test(tenant_get)
-    run_tenant_test(tenant_configure)
-    run_tenant_test(tenant_rename)
-    run_tenant_test(tenant_usetenant)
-    run_tenant_test(tenant_old_commands)
-    run_tenant_test(tenant_group_list)
-    run_tenant_test(tenant_group_get)
-    run_tenant_test(tenant_lock)
-
-
 @enable_logging()
 def idempotency_ids(logger):
     command = "idempotencyids status"
@@ -1456,6 +895,22 @@ def integer_options():
     assert lines[0] == "Option enabled for all transactions"
     assert lines[1].startswith("Committed")
     assert error_output == b""
+
+
+def client_threads_per_version_env_ignored():
+    test_env = fdbcli_env.copy()
+    test_env["FDB_NETWORK_OPTION_CLIENT_THREADS_PER_VERSION"] = "not_an_integer"
+    process = subprocess.run(
+        command_template + ["status minimal"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=test_env,
+    )
+    assert process.returncode == 0
+    assert (
+        b"Environment variable network option could not be set"
+        not in process.stderr
+    )
 
 
 def tls_address_suffix():
@@ -1541,27 +996,25 @@ if __name__ == "__main__":
     if args.process_number == 1:
         # TODO: disable for now, the change can cause the database unavailable
         # advanceversion()
-        cache_range()
         consistencycheck()
         datadistribution()
         kill()
         lockAndUnlock()
         maintenance()
         profile()
-        # TODO: reenable it until it's stable
+        # TODO: re-enable once stable
         # suspend()
         transaction()
-        # this is replaced by the "quota" command
+        clearrange_prefix()
+        # TODO: re-enable once stable
         # throttle()
         triggerddteaminfolog()
-        tenants()
         versionepoch()
         integer_options()
         tls_address_suffix()
-        knobmanagement()
-        # TODO: fix the issue when running through the external client
-        # quota()
+        status_json_file_region_failover_message()
         idempotency_ids()
+        client_threads_per_version_env_ignored()
     else:
         assert args.process_number > 1, "Process number should be positive"
         coordinators()

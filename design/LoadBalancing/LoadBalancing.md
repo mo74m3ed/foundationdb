@@ -8,7 +8,7 @@ The interpocess communications (IPC) between the processes are supported by the 
 
 In many cases, the same request can be proceed by multiple processes, e.g. all commit proxies can accept commit requests, and multiple storage server processes can provide values for a given key in double/triple redundancy mode. A load balancer (LB) can be used to distribute the requests over the possible interfaces, preventing one or a few processes getting overloaded. The interface candidates are also referred as *alternative*s. The LB is also able to react when one or more interfaces are (temporarily) unavailable by retrying, or re-routing the request to other candidates. The interface candidates are also known as *alternative*s.
 
-Two LBs are provided in FoundationDB: `basicLoadBalance` and `loadBalance`, both defined in [`LoadBalance.actor.h`](https://github.com/apple/foundationdb/blob/main/fdbrpc/include/fdbrpc/LoadBalance.actor.h). The `basicLoadBalance` is a simple load balancer which each interface is equally chosen; while the `loadBalance` accepts a model object, which provides [datacenter](https://apple.github.io/foundationdb/configuration.html#configuring-regions) (DC) awaring balancing algorithms, allowing requests being sent to interfaces in the same DC.
+Two LBs are provided in FoundationDB: `basicLoadBalance` and `loadBalance`, both defined in [`LoadBalance.h`](https://github.com/apple/foundationdb/blob/main/fdbrpc/include/fdbrpc/LoadBalance.h). The `basicLoadBalance` is a simple load balancer which each interface is equally chosen; while the `loadBalance` accepts a model object, which provides [datacenter](https://apple.github.io/foundationdb/configuration.html#configuring-regions)-aware balancing algorithms, allowing requests to be sent to interfaces in the same datacenter (DC).
 
 In the following sections, the two LBs will be discussed in details.
 
@@ -18,7 +18,6 @@ In the following sections, the two LBs will be discussed in details.
 
 * Commit proxy interface
 * GetReadVersion proxy interface
-* ConfigFollower interface
 
 Here, the interfaces are assumed to be always *fresh*, i.e. the list of the servers is fixed.
 
@@ -49,7 +48,7 @@ In `basicLoadBalance`, a *best* alternative is picked and used at the beginning.
 `loadBalance` provides a more sophisticated implementation of load balancing. In addition of the basic load balancing, it also provides a variety of features:
 
 * Support for Test Storage Server ([TSS](https://github.com/apple/foundationdb/blob/main/documentation/sphinx/source/tss.rst))
-* Datacenter awaring alternative election
+* Datacenter-aware alternative election
 * Recording the latency and penalty from interfaces, and [prioritize the interfaces based on previously stored data](#with-queuemodel).
 * Able to handle timeouts and SS exceptions with retries.
 
@@ -100,7 +99,7 @@ If no `QueueModel` is provided, the initial candidates are picked randomly. The 
 `QueueModel` holds information about each candidate related to future version, latency and penalty.
 
 * If the storage server is returning a future version error, it is marked as not available until some certain time.
-* Penalty is reported by storage server in each response (see `storageserver.actor.cpp:StorageServer::getPenalty`). It is determined by the write queue length and the durability lagging.
+* Penalty is reported by storage server in each response (see `storageserver.cpp:StorageServer::getPenalty`). It is determined by the write queue length and the durability lagging.
 
 If `QueueModel` exists, the candidates will be picked base on the penalty. Workers with high penalties will be avoided when picking the first two candidates.
 
@@ -132,7 +131,7 @@ graph LR
    	H4 --Additional request failed--> H3
 ```
 
-The first request has a timeout option. If the LB is not able to retrieve the response within the timout, more requests will be sent to secondary and other available interfaces. If the first request failed, it is reset and the next request will be considered as the first request. Certain types of errors can also be returned as response, e.g. `request_may_be_delivered` or `process_behind`, which may not trigger a load-balancer retry.
+The first request has a timeout option. If the LB is not able to retrieve the response within the timeout, more requests will be sent to secondary and other available interfaces. If the first request failed, it is reset and the next request will be considered as the first request. Certain types of errors can also be returned as response, e.g. `request_may_be_delivered` or `process_behind`, which may not trigger a load-balancer retry.
 
 ### Wait for available alternative
 
@@ -161,7 +160,7 @@ Note that "Wait for alternatives" will only timeout if the alternatives are alwa
 
 #### Requests
 
-Original requests in `loadBalancer` are wrapped by `LoadBalance.actor.h:RequestData`. It provides the following additional operations besides the original `flow` request:
+Original requests in `loadBalancer` are wrapped by `LoadBalance.h:RequestData`. It provides the following additional operations besides the original `flow` request:
 
 * TSS support if `QueueModel` is available
 * Translate some errors into `maybe_delivered`, `process_behind` or retries
@@ -224,4 +223,3 @@ while True:
         next_alt = (next_alt + 1) % alts.size()
         time.sleep(.2)
 ```
-

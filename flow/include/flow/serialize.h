@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -153,13 +153,15 @@ inline void save(Archive& ar, const std::string& value) {
 }
 
 template <class Archive, class T>
-class Serializer<Archive, T, typename std::enable_if_t<is_binary_serializable<T>::value>> {
+    requires(is_binary_serializable<T>::value)
+class Serializer<Archive, T> {
 public:
 	static void serialize(Archive& ar, T& t) { ar.serializeBinaryItem(t); }
 };
 
 template <class Archive, class T>
-class Serializer<Archive, T, typename std::enable_if_t<std::is_enum_v<T>>> {
+    requires(std::is_enum_v<T>)
+class Serializer<Archive, T> {
 public:
 	static void serialize(Archive& ar, T& t) {
 		static_assert(is_binary_serializable<std::underlying_type_t<T>>::value);
@@ -426,7 +428,7 @@ class BinaryWriter : NonCopyable {
 public:
 	static const int isDeserializing = 0;
 	static constexpr bool isSerializing = true;
-	typedef BinaryWriter WRITER;
+	using WRITER = BinaryWriter;
 
 	void serializeBytes(StringRef bytes) { serializeBytes(bytes.begin(), bytes.size()); }
 	void serializeBytes(const void* data, int bytes) {
@@ -594,7 +596,7 @@ struct SplitBuffer {
 // A writer that can serialize to a SplitBuffer
 class OverWriter {
 public:
-	typedef OverWriter WRITER;
+	using WRITER = OverWriter;
 
 	template <class VersionOptions>
 	explicit OverWriter(SplitBuffer buf, VersionOptions vo) : len(std::numeric_limits<int>::max()), buf(buf) {
@@ -647,7 +649,12 @@ public:
 		return begin;
 	}
 
-	void serializeBytes(void* data, int bytes) { memcpy(data, static_cast<Impl*>(this)->readBytes(bytes), bytes); }
+	void serializeBytes(void* data, int bytes) {
+		if (bytes == 0) {
+			return;
+		}
+		memcpy(data, static_cast<Impl*>(this)->readBytes(bytes), bytes);
+	}
 
 	template <class T>
 	void serializeBinaryItem(T& t) {
@@ -878,7 +885,7 @@ public:
 struct PacketWriter {
 	static constexpr int isDeserializing = 0;
 	static constexpr bool isSerializing = true;
-	typedef PacketWriter WRITER;
+	using WRITER = PacketWriter;
 
 	PacketBuffer* buffer;
 	struct ReliablePacket*
@@ -895,6 +902,9 @@ struct PacketWriter {
 	}
 
 	void serializeBytes(const void* data, int bytes) {
+		if (bytes == 0) {
+			return;
+		}
 		if (bytes <= buffer->bytes_unwritten()) {
 			memcpy(buffer->data() + buffer->bytes_written, data, bytes);
 			buffer->bytes_written += bytes;
@@ -979,7 +989,7 @@ template <class T>
 struct SerializeSource : MakeSerializeSource<SerializeSource<T>, T> {
 	using value_type = T;
 	T const& value;
-	SerializeSource(T const& value) : value(value) {}
+	explicit SerializeSource(T const& value) : value(value) {}
 	void serializeObjectWriter(ObjectWriter& w) const override { w.serialize(value); }
 	T const& get() const override { return value; }
 };

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@
 #include "flow/singleton.h"
 #include "flow/IAsyncFile.h"
 #include "fdbclient/ActorLineageProfiler.h"
-#include "fdbclient/NameLineage.h"
+#include "NameLineage.h"
 #include <msgpack.hpp>
 #include <memory>
 #include <typeindex>
@@ -313,7 +313,7 @@ boost::asio::io_context& ActorLineageProfilerT::context() {
 	return impl->context;
 }
 
-SampleIngestor::~SampleIngestor() {}
+SampleIngestor::~SampleIngestor() = default;
 
 void ProfilerConfigT::reset(std::map<std::string, std::string> const& config) {
 	bool expectNoMore = false, useFluentD = false, useTCP = false;

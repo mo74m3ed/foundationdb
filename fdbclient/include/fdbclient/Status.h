@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #ifndef FDBCLIENT_STATUS_H
 #define FDBCLIENT_STATUS_H
 
+#include <unordered_map>
 #include "fdbclient/JSONDoc.h"
 
 // Reads the entire string s as a JSON value
@@ -29,11 +30,11 @@
 json_spirit::mValue readJSONStrictly(const std::string& s);
 
 struct StatusObject : json_spirit::mObject {
-	typedef json_spirit::mObject Map;
-	typedef json_spirit::mArray Array;
+	using Map = json_spirit::mObject;
+	using Array = json_spirit::mArray;
 
-	StatusObject() {}
-	StatusObject(json_spirit::mObject const& o) : json_spirit::mObject(o) {}
+	StatusObject() = default;
+	explicit(false) StatusObject(json_spirit::mObject const& o) : json_spirit::mObject(o) {}
 };
 
 template <class Ar>
@@ -59,24 +60,50 @@ void save(Ar& ar, StatusObject const& statusObj) {
 }
 
 struct StatusArray : json_spirit::mArray {
-	StatusArray() {}
-	StatusArray(json_spirit::mArray const& o) : json_spirit::mArray(o.begin(), o.end()) {}
+	StatusArray() = default;
+	explicit(false) StatusArray(json_spirit::mArray const& o) : json_spirit::mArray(o.begin(), o.end()) {}
 };
 
 struct StatusValue : json_spirit::mValue {
-	StatusValue() {}
-	StatusValue(json_spirit::mValue const& o) : json_spirit::mValue(o) {}
+	StatusValue() = default;
+	explicit(false) StatusValue(json_spirit::mValue const& o) : json_spirit::mValue(o) {}
 };
 
-inline StatusObject makeMessage(const char* name, const char* description) {
+enum class MessageType {
+	INCORRECT_CLUSTER_FILE_CONTENTS,
+	NO_CLUSTER_CONTROLLER,
+	QUORUM_NOT_REACHABLE,
+	SERVER_OVERLOADED,
+	STATUS_INCOMPLETE_CLIENT,
+	STATUS_INCOMPLETE_CLUSTER,
+	STATUS_INCOMPLETE_COORDINATORS,
+	STATUS_INCOMPLETE_ERROR,
+	STATUS_INCOMPLETE_TIMEOUT,
+	UNREACHABLE_CLUSTER_CONTROLLER,
+};
+
+inline const std::unordered_map<MessageType, std::string> messageTypeToName{
+	{ MessageType::INCORRECT_CLUSTER_FILE_CONTENTS, "incorrect_cluster_file_contents" },
+	{ MessageType::NO_CLUSTER_CONTROLLER, "no_cluster_controller" },
+	{ MessageType::QUORUM_NOT_REACHABLE, "quorum_not_reachable" },
+	{ MessageType::SERVER_OVERLOADED, "server_overloaded" },
+	{ MessageType::STATUS_INCOMPLETE_CLIENT, "status_incomplete_client" },
+	{ MessageType::STATUS_INCOMPLETE_CLUSTER, "status_incomplete_cluster" },
+	{ MessageType::STATUS_INCOMPLETE_COORDINATORS, "status_incomplete_coordinators" },
+	{ MessageType::STATUS_INCOMPLETE_ERROR, "status_incomplete_error" },
+	{ MessageType::STATUS_INCOMPLETE_TIMEOUT, "status_incomplete_timeout" },
+	{ MessageType::UNREACHABLE_CLUSTER_CONTROLLER, "unreachable_cluster_controller" },
+};
+
+inline StatusObject makeMessage(const MessageType messageType, const char* description) {
 	StatusObject out;
-	out["name"] = name;
+	out["name"] = messageTypeToName.at(messageType);
 	out["description"] = description;
 	return out;
 }
 
 // Typedef to cover older code that was written when this class was only a reader and called StatusObjectReader
-typedef JSONDoc StatusObjectReader;
+using StatusObjectReader = JSONDoc;
 
 // Template specialization for get<JSONDoc> because is convenient to get() an
 // element from an object directly into a JSONDoc to have a handle to that sub-doc.
@@ -103,7 +130,7 @@ inline bool findMessagesByName(StatusObjectReader object, std::set<std::string> 
 		// Since we are looking for a positive match, any exceptions thrown when trying to read
 		// the object in the messages array will be perceived as not-a-match and therefore ignored.
 		try {
-			if (to_find.count(i.get_obj().at("name").get_str()))
+			if (to_find.contains(i.get_obj().at("name").get_str()))
 				return true;
 		} catch (std::exception&) {
 		}

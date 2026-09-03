@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,13 +18,12 @@
  * limitations under the License.
  */
 
-#include <fstream>
-
 #include "flow/flow.h"
-#include "flow/Histogram.h"
 #include "flow/Platform.h"
-#include "flow/TDMetric.actor.h"
+#include "flow/TDMetric.h"
 #include "flow/SystemMonitor.h"
+#include "flow/Knobs.h"
+#include "flow/MemoryTracker.h"
 
 #if defined(ALLOC_INSTRUMENTATION) && defined(__linux__)
 #include <cxxabi.h>
@@ -45,6 +44,49 @@ void initializeSystemMonitorMachineState(SystemMonitorMachineState machineState)
 
 double machineStartTime() {
 	return ::machineState.monitorStartTime;
+}
+
+void NetworkData::init() {
+	bytesSent = Int64Metric::getValueOrDefault("Net2.BytesSent"_sr);
+	countPacketsReceived = Int64Metric::getValueOrDefault("Net2.CountPacketsReceived"_sr);
+	countPacketsGenerated = Int64Metric::getValueOrDefault("Net2.CountPacketsGenerated"_sr);
+	bytesReceived = Int64Metric::getValueOrDefault("Net2.BytesReceived"_sr);
+	countWriteProbes = Int64Metric::getValueOrDefault("Net2.CountWriteProbes"_sr);
+	countReadProbes = Int64Metric::getValueOrDefault("Net2.CountReadProbes"_sr);
+	countReads = Int64Metric::getValueOrDefault("Net2.CountReads"_sr);
+	countWouldBlock = Int64Metric::getValueOrDefault("Net2.CountWouldBlock"_sr);
+	countWrites = Int64Metric::getValueOrDefault("Net2.CountWrites"_sr);
+	countRunLoop = Int64Metric::getValueOrDefault("Net2.CountRunLoop"_sr);
+	countCantSleep = Int64Metric::getValueOrDefault("Net2.CountCantSleep"_sr);
+	countWontSleep = Int64Metric::getValueOrDefault("Net2.CountWontSleep"_sr);
+	countTimers = Int64Metric::getValueOrDefault("Net2.CountTimers"_sr);
+	countTasks = Int64Metric::getValueOrDefault("Net2.CountTasks"_sr);
+	countYields = Int64Metric::getValueOrDefault("Net2.CountYields"_sr);
+	countYieldBigStack = Int64Metric::getValueOrDefault("Net2.CountYieldBigStack"_sr);
+	countYieldCalls = Int64Metric::getValueOrDefault("Net2.CountYieldCalls"_sr);
+	countASIOEvents = Int64Metric::getValueOrDefault("Net2.CountASIOEvents"_sr);
+	countYieldCallsTrue = Int64Metric::getValueOrDefault("Net2.CountYieldCallsTrue"_sr);
+	countRunLoopProfilingSignals = Int64Metric::getValueOrDefault("Net2.CountRunLoopProfilingSignals"_sr);
+	countConnEstablished = Int64Metric::getValueOrDefault("Net2.CountConnEstablished"_sr);
+	countConnClosedWithError = Int64Metric::getValueOrDefault("Net2.CountConnClosedWithError"_sr);
+	countConnClosedWithoutError = Int64Metric::getValueOrDefault("Net2.CountConnClosedWithoutError"_sr);
+	countTLSPolicyFailures = Int64Metric::getValueOrDefault("Net2.CountTLSPolicyFailures"_sr);
+	countLaunchTime = DoubleMetric::getValueOrDefault("Net2.CountLaunchTime"_sr);
+	countReactTime = DoubleMetric::getValueOrDefault("Net2.CountReactTime"_sr);
+	countFileLogicalWrites = Int64Metric::getValueOrDefault("AsyncFile.CountLogicalWrites"_sr);
+	countFileLogicalReads = Int64Metric::getValueOrDefault("AsyncFile.CountLogicalReads"_sr);
+	countAIOSubmit = Int64Metric::getValueOrDefault("AsyncFile.CountAIOSubmit"_sr);
+	countAIOCollect = Int64Metric::getValueOrDefault("AsyncFile.CountAIOCollect"_sr);
+	countFileCacheWrites = Int64Metric::getValueOrDefault("AsyncFile.CountCacheWrites"_sr);
+	countFileCacheReads = Int64Metric::getValueOrDefault("AsyncFile.CountCacheReads"_sr);
+	countFileCacheWritesBlocked = Int64Metric::getValueOrDefault("AsyncFile.CountCacheWritesBlocked"_sr);
+	countFileCacheReadsBlocked = Int64Metric::getValueOrDefault("AsyncFile.CountCacheReadsBlocked"_sr);
+	countFileCachePageReadsMerged = Int64Metric::getValueOrDefault("AsyncFile.CountCachePageReadsMerged"_sr);
+	countFileCacheFinds = Int64Metric::getValueOrDefault("AsyncFile.CountCacheFinds"_sr);
+	countFileCacheReadBytes = Int64Metric::getValueOrDefault("AsyncFile.CountCacheReadBytes"_sr);
+	countFilePageCacheHits = Int64Metric::getValueOrDefault("AsyncFile.CountCachePageReadsHit"_sr);
+	countFilePageCacheMisses = Int64Metric::getValueOrDefault("AsyncFile.CountCachePageReadsMissed"_sr);
+	countFilePageCacheEvictions = Int64Metric::getValueOrDefault("EvictablePageCache.CacheEvictions"_sr);
 }
 
 void systemMonitor() {
@@ -132,8 +174,11 @@ SystemStatistics customSystemMonitor(std::string const& eventName, StatisticsSta
 			    .detail("DiskWriteSeconds", currentStats.processDiskWriteSeconds)
 			    .detail("DiskReadsCount", currentStats.processDiskReadCount)
 			    .detail("DiskWritesCount", currentStats.processDiskWriteCount)
-			    .detail("DiskWriteSectors", currentStats.processDiskWriteSectors)
 			    .detail("DiskReadSectors", currentStats.processDiskReadSectors)
+			    .detail("DiskWriteSectors", currentStats.processDiskWriteSectors)
+			    .detail("DiskReadBytes", currentStats.processDiskReadBytes)
+			    .detail("DiskWriteBytes", currentStats.processDiskWriteBytes)
+
 			    .detail("FileWrites", netData.countFileLogicalWrites - statState->networkState.countFileLogicalWrites)
 			    .detail("FileReads", netData.countFileLogicalReads - statState->networkState.countFileLogicalReads)
 			    .detail("CacheReadBytes",
@@ -182,6 +227,7 @@ SystemStatistics customSystemMonitor(std::string const& eventName, StatisticsSta
 			    .detail("TLSPolicyFailures",
 			            (netData.countTLSPolicyFailures - statState->networkState.countTLSPolicyFailures) /
 			                currentStats.elapsed)
+
 			    .trackLatest(eventName);
 
 			TraceEvent("MemoryMetrics")
@@ -396,18 +442,8 @@ SystemStatistics customSystemMonitor(std::string const& eventName, StatisticsSta
 			uint64_t totalSize = 0;
 			uint64_t totalCount = 0;
 			for (auto i = traceCounts.begin(); i != traceCounts.end(); ++i) {
-				char buf[1024];
 				std::vector<void*>* frames = i->second.backTrace;
-				std::string backTraceStr;
-#if defined(_WIN32)
-				for (int j = 1; j < frames->size(); j++) {
-					_snprintf(buf, 1024, "%p ", frames->at(j));
-					backTraceStr += buf;
-				}
-#else
-				backTraceStr = platform::format_backtrace(&(*frames)[0], frames->size());
-#endif
-
+				std::string backTraceStr = platform::format_backtrace(&(*frames)[0], frames->size());
 				TraceEvent("MemSample")
 				    .detail("Count", (int64_t)i->second.count)
 				    .detail("TotalSize", i->second.totalSize)
@@ -455,6 +491,20 @@ SystemStatistics customSystemMonitor(std::string const& eventName, StatisticsSta
 #endif
 	statState->networkMetricsState = g_network->networkInfo.metrics;
 	statState->networkState = netData;
+
+	// Periodic dump of the per-call-site memory tracker; cadence from the
+	// MEMORY_TRACKING_REPORT_INTERVAL knob (<=0 disables). In simulation the
+	// tracker's tables and this static are shared across all simulated
+	// processes, so one dump fires per interval cluster-wide and its site
+	// numbers blend every process — correct only in a real single-process server.
+	if (FLOW_KNOBS && FLOW_KNOBS->MEMORY_TRACKING_REPORT_INTERVAL > 0) {
+		static double lastMemTrackerDump = 0;
+		if (now() - lastMemTrackerDump >= FLOW_KNOBS->MEMORY_TRACKING_REPORT_INTERVAL) {
+			memTrackerDump(FLOW_KNOBS->MEMORY_TRACKING_REPORT_BYTES_THRESHOLD);
+			lastMemTrackerDump = now();
+		}
+	}
+
 	return currentStats;
 }
 

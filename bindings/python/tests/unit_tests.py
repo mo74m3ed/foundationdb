@@ -4,7 +4,7 @@
 #
 # This source file is part of the FoundationDB open source project
 #
-# Copyright 2013-2023 Apple Inc. and the FoundationDB project authors
+# Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@
 #
 
 import argparse
-import os
 import sys
 import time
 import traceback
@@ -39,7 +38,6 @@ from cancellation_timeout_tests import test_db_retry_limits
 from cancellation_timeout_tests import test_combinations
 
 from size_limit_tests import test_size_limit_option, test_get_approximate_size
-from tenant_tests import test_tenants
 
 VERBOSE = False
 
@@ -185,7 +183,8 @@ def test_watches(db):
 @fdb.transactional
 def test_locality(tr):
     tr.options.set_timeout(60 * 1000)
-    tr.options.set_read_system_keys()  # We do this because the last shard (for now, someday the last N shards) is in the /FF/ keyspace
+    # We do this because the last shard (for now, someday the last N shards) is in the /FF/ keyspace
+    tr.options.set_read_system_keys()
 
     # This isn't strictly transactional, thought we expect it to be given the size of our database
     boundary_keys = list(fdb.locality.get_boundary_keys(tr, b"", b"\xff\xff")) + [
@@ -227,6 +226,19 @@ def test_get_client_status(db):
     assert status["Healthy"]
 
 
+def test_range_split_points(db):
+    begin = b"\x02range-split-points-a"
+    end = b"\x02range-split-points-z"
+    tr = db.create_transaction()
+
+    for limit in (-1, 0, 1, 2):
+        split_points = tr.get_range_split_points(begin, end, 1000000, limit).wait()
+        assert split_points[0] == begin
+        assert split_points[-1] == end
+        if limit >= 0:
+            assert len(split_points) <= limit + 2
+
+
 def run_unit_tests(db):
     try:
         log("test_db_options")
@@ -257,10 +269,8 @@ def run_unit_tests(db):
         test_get_approximate_size(db)
         log("test_get_client_status")
         test_get_client_status(db)
-
-        if fdb.get_api_version() >= 710:
-            log("test_tenants")
-            test_tenants(db)
+        log("test_range_split_points")
+        test_range_split_points(db)
 
     except fdb.FDBError as e:
         print("Unit tests failed: %s" % e.description)

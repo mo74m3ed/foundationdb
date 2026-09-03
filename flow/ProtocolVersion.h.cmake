@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -176,6 +176,10 @@ public: // introduced features
 	PROTOCOL_VERSION_FEATURE(@FDB_PV_CLUSTER_ID_SPECIAL_KEY@, ClusterIdSpecialKey);
 	PROTOCOL_VERSION_FEATURE(@FDB_PV_BLOB_GRANULE_FILE_LOGICAL_SIZE@, BlobGranuleFileLogicalSize);
 	PROTOCOL_VERSION_FEATURE(@FDB_PV_BLOB_RANGE_CHANGE_LOG@, BlobRangeChangeLog);
+	PROTOCOL_VERSION_FEATURE(@FDB_PV_GC_TXN_GENERATIONS@, GcTxnGenerations);
+	PROTOCOL_VERSION_FEATURE(@FDB_PV_MUTATION_CHECKSUM@, MutationChecksum);
+	PROTOCOL_VERSION_FEATURE(@FDB_PV_RANGE_PARTITIONED_BACKUP_WORKER@, RangePartitionedBackupWorker);
+	PROTOCOL_VERSION_FEATURE(@FDB_PV_NATIVE_CDC@, NativeCdc);
 };
 
 template <>

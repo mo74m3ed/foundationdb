@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -287,7 +287,7 @@ TEST_CASE("performance/flow/IndexedSet/integers") {
 	double start = timer();
 	for (int i = 0; i < x.size(); i++) {
 		int t = x[i];
-		is.insert(std::move(t), 3);
+		is.insert(t, 3);
 	}
 	double end = timer();
 	double kps = x.size() / 1000.0 / (end - start);
@@ -396,7 +396,7 @@ TEST_CASE("/flow/IndexedSets/ints") {
 	ASSERT(is.find(20) != is.end());
 
 	for (int i = 20; i < 200; i += 10) {
-		is.insert(std::move(i), 3);
+		is.insert(i, 3);
 		is.testonly_assertBalanced();
 		ASSERT(is.find(i) != is.end());
 	}
@@ -429,7 +429,7 @@ TEST_CASE("/flow/IndexedSet/data constructor and destructor calls match") {
 	count = 0;
 	struct Counter {
 		int value;
-		Counter(int value) : value(value) { count++; }
+		explicit Counter(int value) : value(value) { count++; }
 		~Counter() { count--; }
 		Counter(const Counter& r) : value(r.value) { count++; }
 		void operator=(const Counter& r) { value = r.value; }
@@ -455,7 +455,7 @@ TEST_CASE("/flow/IndexedSet/comparison to std::set") {
 	std::set<int> ss;
 	for (int i = 0; i < 1000000; i++) {
 		int p = deterministicRandom()->randomInt(0, 2000000);
-		is.insert(std::move(p), 1);
+		is.insert(p, 1);
 		ss.insert(p);
 	}
 

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,10 +25,9 @@
 #pragma once
 
 #include "fdbclient/ReadYourWrites.h"
-#include "flow/ThreadHelper.actor.h"
+#include "flow/ThreadHelper.h"
 #include "fdbclient/ClusterInterface.h"
 #include "fdbclient/IClientApi.h"
-#include "fdbclient/ISingleThreadTransaction.h"
 
 // An implementation of IDatabase that serializes operations onto the network thread and interacts with the lower-level
 // client APIs exposed by NativeAPI and ReadYourWrites.
@@ -37,7 +36,6 @@ public:
 	~ThreadSafeDatabase() override;
 	static ThreadFuture<Reference<IDatabase>> createFromExistingDatabase(Database cx);
 
-	Reference<ITenant> openTenant(TenantNameRef tenantName) override;
 	Reference<ITransaction> createTransaction() override;
 
 	void setOption(FDBDatabaseOptions::Option option, Optional<StringRef> value = Optional<StringRef>()) override;
@@ -60,17 +58,11 @@ public:
 	ThreadFuture<Void> forceRecoveryWithDataLoss(const StringRef& dcid) override;
 	ThreadFuture<Void> createSnapshot(const StringRef& uid, const StringRef& snapshot_command) override;
 
-	ThreadFuture<Key> purgeBlobGranules(const KeyRangeRef& keyRange, Version purgeVersion, bool force) override;
-	ThreadFuture<Void> waitPurgeGranulesComplete(const KeyRef& purgeKey) override;
-
-	ThreadFuture<bool> blobbifyRange(const KeyRangeRef& keyRange) override;
-	ThreadFuture<bool> blobbifyRangeBlocking(const KeyRangeRef& keyRange) override;
-	ThreadFuture<bool> unblobbifyRange(const KeyRangeRef& keyRange) override;
-	ThreadFuture<Standalone<VectorRef<KeyRangeRef>>> listBlobbifiedRanges(const KeyRangeRef& keyRange,
-	                                                                      int rangeLimit) override;
-
-	ThreadFuture<Version> verifyBlobRange(const KeyRangeRef& keyRange, Optional<Version> version) override;
-	ThreadFuture<bool> flushBlobRange(const KeyRangeRef& keyRange, bool compact, Optional<Version> version) override;
+	ThreadFuture<CDCStreamId> registerNativeCdcStream(const KeyRef& name, const KeyRangeRef& keys) override;
+	ThreadFuture<Void> removeNativeCdcStream(const KeyRef& name) override;
+	ThreadFuture<std::vector<NativeCdcStreamInfo>> listNativeCdcStreams() override;
+	ThreadFuture<Reference<INativeCdcConsumer>> createNativeCdcConsumer(const KeyRef& name) override;
+	ThreadFuture<Reference<INativeCdcConsumer>> resumeNativeCdcConsumer(const NativeCdcCursor& cursor) override;
 
 	ThreadFuture<DatabaseSharedState*> createSharedState() override;
 	void setSharedState(DatabaseSharedState* p) override;
@@ -79,55 +71,21 @@ public:
 	ThreadFuture<Standalone<StringRef>> getClientStatus() override;
 
 private:
-	friend class ThreadSafeTenant;
 	friend class ThreadSafeTransaction;
-	bool isConfigDB{ false };
 	DatabaseContext* db;
 
 public: // Internal use only
 	enum class ConnectionRecordType { FILE, CONNECTION_STRING };
 	ThreadSafeDatabase(ConnectionRecordType connectionRecordType, std::string connectionRecord, int apiVersion);
-	ThreadSafeDatabase(DatabaseContext* db) : db(db) {}
+	explicit ThreadSafeDatabase(DatabaseContext* db) : db(db) {}
 	DatabaseContext* unsafeGetPtr() const { return db; }
 };
 
-class ThreadSafeTenant : public ITenant, ThreadSafeReferenceCounted<ThreadSafeTenant>, NonCopyable {
-public:
-	ThreadSafeTenant(Reference<ThreadSafeDatabase> db, TenantName name);
-	~ThreadSafeTenant() override;
-
-	Reference<ITransaction> createTransaction() override;
-
-	ThreadFuture<int64_t> getId() override;
-	ThreadFuture<Key> purgeBlobGranules(const KeyRangeRef& keyRange, Version purgeVersion, bool force) override;
-	ThreadFuture<Void> waitPurgeGranulesComplete(const KeyRef& purgeKey) override;
-
-	ThreadFuture<bool> blobbifyRange(const KeyRangeRef& keyRange) override;
-	ThreadFuture<bool> blobbifyRangeBlocking(const KeyRangeRef& keyRange) override;
-	ThreadFuture<bool> unblobbifyRange(const KeyRangeRef& keyRange) override;
-	ThreadFuture<Standalone<VectorRef<KeyRangeRef>>> listBlobbifiedRanges(const KeyRangeRef& keyRange,
-	                                                                      int rangeLimit) override;
-
-	ThreadFuture<Version> verifyBlobRange(const KeyRangeRef& keyRange, Optional<Version> version) override;
-	ThreadFuture<bool> flushBlobRange(const KeyRangeRef& keyRange, bool compact, Optional<Version> version) override;
-
-	void addref() override { ThreadSafeReferenceCounted<ThreadSafeTenant>::addref(); }
-	void delref() override { ThreadSafeReferenceCounted<ThreadSafeTenant>::delref(); }
-
-private:
-	Reference<ThreadSafeDatabase> db;
-	TenantName name;
-	Tenant* tenant;
-};
-
 // An implementation of ITransaction that serializes operations onto the network thread and interacts with the
-// lower-level client APIs exposed by ISingleThreadTransaction
+// lower-level client APIs exposed by ReadYourWritesTransaction.
 class ThreadSafeTransaction : public ITransaction, ThreadSafeReferenceCounted<ThreadSafeTransaction>, NonCopyable {
 public:
-	explicit ThreadSafeTransaction(DatabaseContext* cx,
-	                               ISingleThreadTransaction::Type type,
-	                               Optional<TenantName> tenantName,
-	                               Tenant* tenantPtr);
+	explicit ThreadSafeTransaction(DatabaseContext* cx);
 	~ThreadSafeTransaction() override;
 
 	// Note: used while refactoring fdbcli, need to be removed later
@@ -165,21 +123,14 @@ public:
 	                                               const KeySelectorRef& end,
 	                                               const StringRef& mapper,
 	                                               GetRangeLimits limits,
-	                                               int matchIndex,
 	                                               bool snapshot,
 	                                               bool reverse) override;
 	ThreadFuture<Standalone<VectorRef<const char*>>> getAddressesForKey(const KeyRef& key) override;
 	ThreadFuture<Standalone<StringRef>> getVersionstamp() override;
 	ThreadFuture<int64_t> getEstimatedRangeSizeBytes(const KeyRangeRef& keys) override;
 	ThreadFuture<Standalone<VectorRef<KeyRef>>> getRangeSplitPoints(const KeyRangeRef& range,
-	                                                                int64_t chunkSize) override;
-
-	ThreadFuture<Standalone<VectorRef<KeyRangeRef>>> getBlobGranuleRanges(const KeyRangeRef& keyRange,
-	                                                                      int rangeLimit) override;
-
-	ThreadFuture<Standalone<VectorRef<BlobGranuleSummaryRef>>> summarizeBlobGranules(const KeyRangeRef& keyRange,
-	                                                                                 Optional<Version> summaryVersion,
-	                                                                                 int rangeLimit) override;
+	                                                                int64_t chunkSize,
+	                                                                int limit = -1) override;
 
 	void addReadConflictRange(const KeyRangeRef& keys) override;
 	void makeSelfConflicting();
@@ -209,8 +160,6 @@ public:
 	ThreadFuture<Void> checkDeferredError();
 	ThreadFuture<Void> onError(Error const& e) override;
 
-	Optional<TenantName> getTenant() override;
-
 	// These are to permit use as state variables in actors:
 	ThreadSafeTransaction() : tr(nullptr), initialized(std::make_shared<std::atomic_bool>(false)) {}
 	void operator=(ThreadSafeTransaction&& r) noexcept;
@@ -221,13 +170,11 @@ public:
 	void addref() override { ThreadSafeReferenceCounted<ThreadSafeTransaction>::addref(); }
 	void delref() override { ThreadSafeReferenceCounted<ThreadSafeTransaction>::delref(); }
 
-	ThreadFuture<ApiResult> execAsyncRequest(ApiRequest request) override;
-
-	FDBAllocatorIfc* getAllocatorInterface() override;
+	void debugTrace(BaseTraceEvent&&) override;
+	void debugPrint(std::string const& message) override;
 
 private:
-	ISingleThreadTransaction* tr;
-	const Optional<TenantName> tenantName;
+	ReadYourWritesTransaction* tr;
 	std::shared_ptr<std::atomic_bool> initialized;
 };
 

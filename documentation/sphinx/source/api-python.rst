@@ -7,7 +7,6 @@
 .. |database-type| replace:: ``Database``
 .. |database-class| replace:: :class:`Database`
 .. |database-auto| replace:: the :func:`@fdb.transactional <transactional>` decorator
-.. |tenant-type| replace:: :class:`Tenant`
 .. |transaction-class| replace:: :class:`Transaction`
 .. |get-key-func| replace:: :func:`Transaction.get_key`
 .. |get-range-func| replace:: :func:`Transaction.get_range`
@@ -65,12 +64,12 @@ Python API
 .. |future-object| replace:: :ref:`Future <api-python-future>` object
 .. |infrequent| replace:: *Infrequently used*.
 .. |slice-defaults| replace:: The default slice begin is ``''``; the default slice end is ``'\xFF'``.
-.. |byte-string| replace:: In Python 2, a byte string is a string of type ``str``. In Python 3, a byte string has type ``bytes``.
+.. |byte-string| replace:: In Python 3, a byte string has type ``bytes``.
 
 Installation
 ============
 
-The FoundationDB Python API is compatible with Python 2.7 - 3.7. You will need to have a Python version within this range on your system before the FoundationDB Python API can be installed. Also please note that Python 3.7 no longer bundles a full copy of libffi, which is used for building the _ctypes module on non-macOS UNIX platforms. Hence, if you are using Python 3.7, you should make sure libffi is already installed on your system.
+The FoundationDB Python API is compatible with 3.8 and newer versions.
 
 On macOS, the FoundationDB Python API is installed as part of the FoundationDB installation (see :ref:`installing-client-binaries`). On Ubuntu or RHEL/CentOS, you will need to install the FoundationDB Python API manually via Python's package manager ``pip``:
 
@@ -109,7 +108,7 @@ Opening a database
 After importing the ``fdb`` module and selecting an API version, you probably want to open a :class:`Database` using :func:`open`::
 
     import fdb
-    fdb.api_version(710300)
+    fdb.api_version(800)
     db = fdb.open()
 
 .. function:: open( cluster_file=None, event_model=None )
@@ -312,14 +311,6 @@ A |database-blurb1| |database-blurb2|
 
     Returns a new :class:`Transaction` object.  Consider using the :func:`@fdb.transactional <transactional>` decorator to create transactions instead, since it will automatically provide you with appropriate retry behavior.
 
-.. method:: Database.open_tenant(tenant_name)
-
-    Opens an existing tenant to be used for running transactions and returns it as a :class`Tenant` object. 
-
-    The tenant name can be either a byte string or a tuple. If a tuple is provided, the tuple will be packed using the tuple layer to generate the byte string tenant name.
-
-    .. note :: Opening a tenant does not check its existence in the cluster. If the tenant does not exist, attempts to read or write data with it will fail.
-
 .. |sync-read| replace:: This read is fully synchronous.
 .. |sync-write| replace:: This change will be committed immediately, and is fully synchronous.
 
@@ -465,19 +456,6 @@ Database options
 
     |option-db-snapshot-ryw-disable-blurb|
     
-Tenant objects
-==============
-
-.. class:: Tenant
-
-|tenant-blurb1|
-
-.. method:: Tenant.create_transaction()
-
-    Returns a new :class:`Transaction` object.  Consider using the :func:`@fdb.transactional <transactional>` decorator to create transactions instead, since it will automatically provide you with appropriate retry behavior.
-
-.. _api-python-transactional-decorator:
-
 Transactional decoration
 ========================
 
@@ -494,9 +472,9 @@ Transactional decoration
 
     The ``@fdb.transactional`` decorator makes ``simple_function`` a transactional function.  All functions using this decorator must have an argument **named** ``tr``.  This specially named argument is passed a transaction that the function can use to do reads and writes.
 
-    A caller of a transactionally decorated function can pass a :class:`Database` or :class:`Tenant` instead of a transaction for the ``tr`` parameter.  Then a transaction will be created automatically, and automatically committed before returning to the caller.  The decorator will retry calling the decorated function until the transaction successfully commits.
+    A caller of a transactionally decorated function can pass a :class:`Database` instead of a transaction for the ``tr`` parameter.  Then a transaction will be created automatically, and automatically committed before returning to the caller.  The decorator will retry calling the decorated function until the transaction successfully commits.
 
-    If ``db`` is a :class:`Database` or :class:`Tenant`, a call like ::
+    If ``db`` is a :class:`Database`, a call like ::
 
         simple_function(db, 'a', 'b')
 
@@ -530,7 +508,7 @@ A ``Transaction`` object represents a FoundationDB database transaction.  All op
 
 The most convenient way to use Transactions is using the :func:`@fdb.transactional <transactional>` decorator.
 
-Keys and values in FoundationDB are byte strings (``str`` in Python 2.x, ``bytes`` in 3.x).  To encode other data types, see the :mod:`fdb.tuple` module and :ref:`encoding-data-types`.
+Keys and values in FoundationDB are byte strings (``bytes`` type in Python 3).  To encode other data types, see the :mod:`fdb.tuple` module and :ref:`encoding-data-types`.
 
 Attributes
 ----------
@@ -765,7 +743,7 @@ Committing
 
     |commit-outstanding-reads-blurb|
 
-    .. note :: Consider using the :func:`@fdb.transactional <transactional>` decorator, which not only calls :meth:`Database.create_transaction` or :meth`Tenant.create_transaction` and :meth:`Transaction.commit()` for you but also implements the required error handling and retry logic for transactions.
+    .. note :: Consider using the :func:`@fdb.transactional <transactional>` decorator, which not only calls :meth:`Database.create_transaction` and :meth:`Transaction.commit()` for you but also implements the required error handling and retry logic for transactions.
 
     .. warning :: |used-during-commit-blurb|
 
@@ -861,9 +839,9 @@ Transaction misc functions
 
     .. note:: The estimated size is calculated based on the sampling done by FDB server. The sampling algorithm works roughly in this way: the larger the key-value pair is, the more likely it would be sampled and the more accurate its sampled size would be. And due to that reason it is recommended to use this API to query against large ranges for accuracy considerations. For a rough reference, if the returned size is larger than 3MB, one can consider the size to be accurate.
 
-.. method:: Transaction.get_range_split_points(self, begin_key, end_key, chunk_size)
+.. method:: Transaction.get_range_split_points(self, begin_key, end_key, chunk_size, limit=-1)
 
-    Gets a list of keys that can split the given range into (roughly) equally sized chunks based on ``chunk_size``. Returns a :class:`FutureKeyArray`.
+    Gets a list of keys that can split the given range into (roughly) equally sized chunks based on ``chunk_size``. A non-negative ``limit`` caps the number of interior split points, including shard boundaries. Returns a :class:`FutureKeyArray`.
     .. note:: The returned split points contain the start key and end key of the given range
 
 .. method:: Transaction.get_approximate_size()
@@ -1109,7 +1087,7 @@ The following event models are available:
     The default.  Blocking operations will block the current Python thread.  This is also fine for programs without any form of concurrency.
 
 ``event_model="gevent"``
-    The calling program uses the `gevent <http://www.gevent.org/>`_ module for single-threaded concurrency. Blocking operations will block the current greenlet.
+    The calling program uses the `gevent <https://www.gevent.org/>`_ module for single-threaded concurrency. Blocking operations will block the current greenlet.
 
     The FoundationDB Python API has been tested with gevent versions 0.13.8 and 1.0rc2 and should work with all gevent 0.13 and 1.0 releases.
 
@@ -1157,11 +1135,10 @@ The tuple layer in the FoundationDB Python API supports tuples that contain elem
 +-----------------------+-------------------------------------------------------------------------------+
 | Byte string           | Any ``value`` such that ``isinstance(value, bytes)``                          |
 +-----------------------+-------------------------------------------------------------------------------+
-| Unicode string        | Any ``value`` such that ``isinstance(value, unicode)``                        |
+| Unicode string        | Any ``value`` such that ``isinstance(value, str)``                            |
 +-----------------------+-------------------------------------------------------------------------------+
-| Integer               | Python 2.7: Any ``value`` such that ``isinstance(value, (int,long))`` and     |
-|                       | ``-2**2040+1 <= value <= 2**2040-1``. Python 3.x: Any ``value`` such that     |
-|                       | ``isinstance(value, int)`` and ``-2**2040+1 <= value <= 2**2040-1``.          |
+| Integer               | Any ``value`` such that ``isinstance(value, int)`` and                        |
+|                       | ``-2**2040+1 <= value <= 2**2040-1``.                                         |
 +-----------------------+-------------------------------------------------------------------------------+
 | Floating point number | Any ``value`` such that ``isinstance(value, fdb.tuple.SingleFloat)`` or       |
 | (single-precision)    | ``isinstance(value, ctypes.c_float)``                                         |
@@ -1570,32 +1547,3 @@ Locality information
 .. method:: fdb.locality.get_addresses_for_key(tr, key)
 
     Returns a :class:`fdb.FutureStringArray`. You must call the :meth:`fdb.Future.wait()` method on this object to retrieve a list of public network addresses as strings, one for each of the storage servers responsible for storing ``key`` and its associated value.
-
-Tenant management
-=================
-
-.. module:: fdb.tenant_management
-
-The FoundationDB API includes functions to manage the set of tenants in a cluster.
-
-.. method:: fdb.tenant_management.create_tenant(db_or_tr, tenant_name)
-
-    Creates a new tenant in the cluster.
-
-    The tenant name can be either a byte string or a tuple and cannot start with the ``\xff`` byte. If a tuple is provided, the tuple will be packed using the tuple layer to generate the byte string tenant name.
-
-    If a database is provided to this function for the ``db_or_tr`` parameter, then this function will first check if the tenant already exists. If it does, it will fail with a ``tenant_already_exists`` error. Otherwise, it will create a transaction and attempt to create the tenant in a retry loop. If the tenant is created concurrently by another transaction, this function may still return successfully.
-
-    If a transaction is provided to this function for the ``db_or_tr`` parameter, then this function will not check if the tenant already exists. It is up to the user to perform that check if required. The user must also successfully commit the transaction in order for the creation to take effect.
-
-.. method:: fdb.tenant_management.delete_tenant(db_or_tr, tenant_name)
-
-    Delete a tenant from the cluster.
-
-    The tenant name can be either a byte string or a tuple. If a tuple is provided, the tuple will be packed using the tuple layer to generate the byte string tenant name.
-
-    It is an error to delete a tenant that still has data. To delete a non-empty tenant, first clear all of the keys in the tenant.
-
-    If a database is provided to this function for the ``db_or_tr`` parameter, then this function will first check if the tenant already exists. If it does not, it will fail with a ``tenant_not_found`` error. Otherwise, it will create a transaction and attempt to delete the tenant in a retry loop. If the tenant is deleted concurrently by another transaction, this function may still return successfully.
-
-    If a transaction is provided to this function for the ``db_or_tr`` parameter, then this function will not check if the tenant already exists. It is up to the user to perform that check if required. The user must also successfully commit the transaction in order for the deletion to take effect.

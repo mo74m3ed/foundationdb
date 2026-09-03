@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ public class MicroSpatial {
 		zLabel = new Subspace(Tuple.from("Z"));
 	}
 
-	// TODO These three methods, xyToZ, zToXy, and setLocation, are allin the recipe book.
+	// TODO These three methods, xyToZ, zToXy, and setLocation, are all in the recipe book.
 	public long xyToZ(long[] p){
 		long x,y,z;
 		x = p[0]; y = p[1];

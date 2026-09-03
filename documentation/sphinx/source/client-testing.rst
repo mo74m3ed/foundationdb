@@ -642,7 +642,7 @@ The subclasses of the ``ApiWorkload`` inherit the following configuration option
 - ``numRandomOperations``: the number of random operations to be executed per workload (default: 1000)
 - ``runUntilStop``: run the workload indefinitely until the stop command is received (default: false).
    This execution mode in upgrade tests and other scripted tests, where the workload needs to
-   be generated continously until completion of the scripted test.
+   be generated continuously until completion of the scripted test.
 - ``numOperationsForProgressCheck``: the number of operations to be performed to confirm a progress 
    check (default: 10). This option is used in combination with ``runUntilStop``. Progress checks are
    initiated by a test script to check if the client workload is successfully progressing after a
@@ -650,8 +650,6 @@ The subclasses of the ``ApiWorkload`` inherit the following configuration option
 
 The FDB server configuration can be specialized in the section ``[[server]]``:
 
-- ``tenants_enabled``: enable multitenancy (default: true)
-- ``blob_granules_enabled``:  enable support for blob granules (default: false)
 - ``tls_enabled``: enable TLS (default: false)
 - ``tls_client_chain_len``: the length of the client-side TLS chain (default: 2)
 - ``tls_server_chain_len``: the length of the server-side TLS chain (default: 3)

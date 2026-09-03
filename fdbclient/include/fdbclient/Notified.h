@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,9 @@
 #pragma once
 
 #include "fdbclient/FDBTypes.h"
-#include "flow/TDMetric.actor.h"
+#include "flow/TDMetric.h"
+#include "flow/swift_support.h"
+#include <queue>
 
 template <class T>
 struct IsMetricHandle : std::false_type {};
@@ -80,12 +82,12 @@ struct Notified {
 		val = std::move(r.val);
 	}
 
-	int numWaiting() { return waiting.size(); }
+	int numWaiting() const { return waiting.size(); }
 
 private:
 	using Item = std::pair<ValueType, Promise<Void>>;
 	struct ItemCompare {
-		bool operator()(const Item& a, const Item& b) { return a.first > b.first; }
+		bool operator()(const Item& a, const Item& b) const { return a.first > b.first; }
 	};
 	std::priority_queue<Item, std::vector<Item>, ItemCompare> waiting;
 	T val;

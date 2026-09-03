@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,9 @@
 #define FLOW_DETERIMINISTIC_RANDOM_H
 #pragma once
 
+#include <boost/random/mersenne_twister.hpp>
+#include <boost/random/uniform_int_distribution.hpp>
+
 #include <cinttypes>
 #include "flow/IRandom.h"
 #include "flow/Error.h"
@@ -30,16 +33,25 @@
 
 #include <random>
 
-class DeterministicRandom final : public IRandom, public ReferenceCounted<DeterministicRandom> {
+// FIXME: Remove once https://github.com/apple/swift/issues/61620 is fixed.
+#define SWIFT_CXX_REF_DETERMINISTICRANDOM                                                                              \
+	__attribute__((swift_attr("import_reference"))) __attribute__((swift_attr("retain:addref_DeterministicRandom")))   \
+	__attribute__((swift_attr("release:delref_DeterministicRandom")))
+
+class SWIFT_CXX_REF_DETERMINISTICRANDOM DeterministicRandom final : public IRandom,
+                                                                    public ReferenceCounted<DeterministicRandom> {
 private:
-	std::mt19937 random;
+	// Use boost::random::mt19937 to get consistent output across
+	// different compilers and therefore across different C++ standard
+	// library implementations.
+	boost::random::mt19937_64 rng;
 	uint64_t next;
 	bool useRandLog;
 
 	uint64_t gen64();
 
 public:
-	DeterministicRandom(uint32_t seed, bool useRandLog = false);
+	DeterministicRandom(uint64_t seed, bool useRandLog = false);
 	double random01() override;
 	int randomInt(int min, int maxPlusOne) override;
 	int64_t randomInt64(int64_t min, int64_t maxPlusOne) override;
@@ -50,9 +62,21 @@ public:
 	char randomAlphaNumeric() override;
 	std::string randomAlphaNumeric(int length) override;
 	void randomBytes(uint8_t* buf, int length) override;
+	bool truePercent(const int percent) override;
 	uint64_t peek() const override;
+	void resetSeed(uint64_t seed) override; // Reset the random number generator with a new seed
 	void addref() override;
 	void delref() override;
 };
+
+// FIXME: Remove once https://github.com/apple/swift/issues/61620 is fixed.
+inline void addref_DeterministicRandom(DeterministicRandom* ptr) {
+	addref(ptr);
+}
+
+// FIXME: Remove once https://github.com/apple/swift/issues/61620 is fixed.
+inline void delref_DeterministicRandom(DeterministicRandom* ptr) {
+	delref(ptr);
+}
 
 #endif

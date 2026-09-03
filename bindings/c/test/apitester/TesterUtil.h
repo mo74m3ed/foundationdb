@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -133,13 +133,11 @@ KeyValueArray copyKeyValueArray(fdb::future_var::KeyValueRefArray::Type array);
 using KeyRangeArray = std::vector<fdb::KeyRange>;
 KeyRangeArray copyKeyRangeArray(fdb::future_var::KeyRangeRefArray::Type array);
 
-using GranuleSummaryArray = std::vector<fdb::GranuleSummary>;
-GranuleSummaryArray copyGranuleSummaryArray(fdb::future_var::GranuleSummaryRefArray::Type array);
-
 static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "Do not support non-little-endian systems");
 
 // Converts a little-endian encoded number into an integral type.
-template <class T, typename = std::enable_if_t<std::is_integral<T>::value>>
+template <class T>
+    requires(std::is_integral_v<T>)
 static T toInteger(fdb::BytesRef value) {
 	ASSERT(value.size() == sizeof(T));
 	T output;
@@ -148,7 +146,8 @@ static T toInteger(fdb::BytesRef value) {
 }
 
 // Converts an integral type to a little-endian encoded byte string.
-template <class T, typename = std::enable_if_t<std::is_integral<T>::value>>
+template <class T>
+    requires(std::is_integral_v<T>)
 static fdb::ByteString toByteString(T value) {
 	fdb::ByteString output(sizeof(T), 0);
 	memcpy(output.data(), (const uint8_t*)&value, sizeof(value));

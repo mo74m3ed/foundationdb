@@ -3,7 +3,7 @@
 #
 # This source file is part of the FoundationDB open source project
 #
-# Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+# Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -48,7 +48,6 @@ class Tester:
         threads_enabled=True,
         types=COMMON_TYPES,
         directory_snapshot_ops_enabled=True,
-        tenants_enabled=False,
     ):
         self.name = name
         self.cmd = cmd
@@ -58,7 +57,6 @@ class Tester:
         self.threads_enabled = threads_enabled
         self.types = types
         self.directory_snapshot_ops_enabled = directory_snapshot_ops_enabled
-        self.tenants_enabled = tenants_enabled
 
     def supports_api_version(self, api_version):
         return (
@@ -86,21 +84,11 @@ _java_cmd = "java -ea -cp %s:%s com.apple.foundationdb.test." % (
 testers = {
     "python": Tester(
         "python",
-        "python " + _absolute_path("python/tests/tester.py"),
-        2040,
-        23,
-        MAX_API_VERSION,
-        types=ALL_TYPES,
-        tenants_enabled=True,
-    ),
-    "python3": Tester(
-        "python3",
         "python3 " + _absolute_path("python/tests/tester.py"),
         2040,
         23,
         MAX_API_VERSION,
         types=ALL_TYPES,
-        tenants_enabled=True,
     ),
     "ruby": Tester(
         "ruby", _absolute_path("ruby/tests/tester.rb"), 2040, 23, MAX_API_VERSION
@@ -112,7 +100,6 @@ testers = {
         510,
         MAX_API_VERSION,
         types=ALL_TYPES,
-        tenants_enabled=True,
     ),
     "java_async": Tester(
         "java",
@@ -121,7 +108,6 @@ testers = {
         510,
         MAX_API_VERSION,
         types=ALL_TYPES,
-        tenants_enabled=True,
     ),
     "go": Tester(
         "go",
@@ -136,6 +122,14 @@ testers = {
         _absolute_path("flow/bin/fdb_flow_tester"),
         63,
         500,
+        MAX_API_VERSION,
+        directory_snapshot_ops_enabled=False,
+    ),
+    "swift": Tester(
+        "swift",
+        _absolute_path("swift/bin/stacktester_swift"),
+        63,
+        730,
         MAX_API_VERSION,
         directory_snapshot_ops_enabled=False,
     ),

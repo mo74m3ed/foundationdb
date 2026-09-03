@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 #include <string_view>
 
 #include "flow/flow.h"
+#include "flow/FlowThread.h"
 
 // The IThreadPool interface represents a thread pool suitable for doing blocking disk-intensive work
 // (as opposed to a one-thread-per-core pool for CPU-intensive work)
@@ -45,7 +46,7 @@
 
 class IThreadPoolReceiver {
 public:
-	virtual ~IThreadPoolReceiver() {}
+	virtual ~IThreadPoolReceiver() = default;
 	virtual void init() = 0;
 };
 
@@ -54,11 +55,11 @@ struct ThreadAction {
 	virtual void cancel() = 0;
 	virtual double getTimeEstimate() const = 0; // for simulation
 };
-typedef ThreadAction* PThreadAction;
+using PThreadAction = ThreadAction*;
 
 class IThreadPool {
 public:
-	virtual ~IThreadPool() {}
+	virtual ~IThreadPool() = default;
 	virtual Future<Void> getError() const = 0; // asynchronously throws an error if there is an internal error
 	virtual void addThread(IThreadPoolReceiver* userData, const char* name = nullptr) = 0;
 	virtual void post(PThreadAction action) = 0;
@@ -82,13 +83,21 @@ public:
 template <class T>
 class ThreadReturnPromise : NonCopyable {
 public:
-	ThreadReturnPromise() {}
+	ThreadReturnPromise() = default;
+	ThreadReturnPromise(const ThreadReturnPromise& p) = delete;
+	ThreadReturnPromise(ThreadReturnPromise&& other) : promise(std::move(other.promise)) {}
+
 	~ThreadReturnPromise() {
 		if (promise.isValid())
 			sendError(broken_promise());
 	}
 
-	Future<T> getFuture() const { // Call only on the originating thread!
+	// NOTE:
+	// - Call only on the originating thread.
+	// - Must be called before `send` or `sendError`. Will result into crash otherwise, since
+	//   tagAndForward() will take ownership of underlying promise.
+	Future<T> getFuture() const {
+		ASSERT(isValid());
 		return promise.getFuture();
 	}
 
@@ -108,51 +117,26 @@ public:
 		                                                    : TaskPriority::DefaultOnMainThread);
 	}
 	bool isValid() const { return promise.isValid(); }
+	bool canBeSet() const { return promise.canBeSet(); }
+
+	int getFutureReferenceCount() const { return promise.getFutureReferenceCount(); }
+	int getPromiseReferenceCount() const { return promise.getPromiseReferenceCount(); }
 
 private:
 	Promise<T> promise;
-};
-
-template <class T>
-class ThreadReturnPromiseStream : NonCopyable {
-public:
-	ThreadReturnPromiseStream() {}
-	~ThreadReturnPromiseStream() {}
-
-	FutureStream<T> getFuture() { // Call only on the originating thread!
-		return promiseStream.getFuture();
-	}
-
-	void send(T const& t) { // Can be called safely from another thread.
-		Promise<Void> signal;
-		tagAndForward(&promiseStream, t, signal.getFuture());
-		g_network->onMainThread(std::move(signal),
-		                        g_network->isOnMainThread() ? incrementPriorityIfEven(g_network->getCurrentTask())
-		                                                    : TaskPriority::DefaultOnMainThread);
-	}
-
-	void sendError(Error const& e) { // Can be called safely from another thread.
-		Promise<Void> signal;
-		tagAndForwardError(&promiseStream, e, signal.getFuture());
-		g_network->onMainThread(std::move(signal),
-		                        g_network->isOnMainThread() ? incrementPriorityIfEven(g_network->getCurrentTask())
-		                                                    : TaskPriority::DefaultOnMainThread);
-	}
-
-private:
-	PromiseStream<T> promiseStream;
 };
 
 Reference<IThreadPool> createGenericThreadPool(int stackSize = 0, int pri = 10);
 
 class DummyThreadPool final : public IThreadPool, ReferenceCounted<DummyThreadPool> {
 public:
-	~DummyThreadPool() override {}
+	~DummyThreadPool() override = default;
 	DummyThreadPool() : thread(nullptr) {}
 	Future<Void> getError() const override { return errors.getFuture(); }
 	void addThread(IThreadPoolReceiver* userData, const char* name = nullptr) override {
 		ASSERT(!thread);
 		thread = userData;
+		userData->init();
 	}
 	void post(PThreadAction action) override {
 		try {

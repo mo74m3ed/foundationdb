@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,105 +29,93 @@
 #include "fdbclient/IClientApi.h"
 #include "flow/ApiVersion.h"
 #include "flow/ProtocolVersion.h"
-#include "flow/ThreadHelper.actor.h"
+#include "flow/ThreadHelper.h"
 #include "flow/WipedString.h"
 
 // FdbCApi is used as a wrapper around the FoundationDB C API that gets loaded from an external client library.
 // All of the required functions loaded from that external library are stored in function pointers in this struct.
 struct FdbCApi : public ThreadSafeReferenceCounted<FdbCApi> {
-	typedef struct FDB_future FDBFuture;
-	typedef struct FDBResult_ FDBResult;
-	typedef struct FDB_cluster FDBCluster;
-	typedef struct FDB_database FDBDatabase;
-	typedef struct FDB_tenant FDBTenant;
-	typedef struct FDB_transaction FDBTransaction;
+	using FDBFuture = struct FDB_future;
+	using FDBResult = struct FDB_result;
+	using FDBCluster = struct FDB_cluster;
+	using FDBDatabase = struct FDB_database;
+	using FDBTransaction = struct FDB_transaction;
+	using FDBNativeCdcConsumer = struct FDB_native_cdc_consumer;
 
-	typedef int fdb_error_t;
-	typedef int fdb_bool_t;
+	using fdb_error_t = int;
+	using fdb_bool_t = int;
 
 #pragma pack(push, 4)
-	typedef struct key {
+	using FDBKey = struct key {
 		const uint8_t* key;
 		int keyLength;
-	} FDBKey;
-	typedef struct keyvalue {
+	};
+	using FDBKeyValue = struct keyvalue {
 		const void* key;
 		int keyLength;
 		const void* value;
 		int valueLength;
-	} FDBKeyValue;
+	};
 
 #pragma pack(pop)
 
 	/* Memory layout of KeySelectorRef. */
-	typedef struct keyselector {
+	using FDBKeySelector = struct keyselector {
 		FDBKey key;
 		/* orEqual and offset have not be tested in C binding. Just a placeholder. */
 		fdb_bool_t orEqual;
 		int offset;
-	} FDBKeySelector;
+	};
 
 	/* Memory layout of GetRangeReqAndResultRef. */
-	typedef struct getrangereqandresult {
+	using FDBGetRangeReqAndResult = struct getrangereqandresult {
 		FDBKeySelector begin;
 		FDBKeySelector end;
 		FDBKeyValue* data;
 		int m_size, m_capacity;
-	} FDBGetRangeReqAndResult;
+	};
 
-	typedef struct mappedkeyvalue {
+	using FDBMappedKeyValue = struct mappedkeyvalue {
 		FDBKey key;
 		FDBKey value;
 		/* It's complicated to map a std::variant to C. For now we assume the underlying requests are always getRange
 		 * and take the shortcut. */
 		FDBGetRangeReqAndResult getRange;
 		unsigned char buffer[32];
-	} FDBMappedKeyValue;
+	};
 
 #pragma pack(push, 4)
-	typedef struct keyrange {
+	using FDBKeyRange = struct keyrange {
 		const void* beginKey;
 		int beginKeyLength;
 		const void* endKey;
 		int endKeyLength;
-	} FDBKeyRange;
+	};
 
-	typedef struct granulesummary {
-		FDBKeyRange key_range;
-		int64_t snapshot_version;
-		int64_t snapshot_size;
-		int64_t delta_version;
-		int64_t delta_size;
-	} FDBGranuleSummary;
+	using FDBNativeCdcStreamInfo = struct native_cdc_stream_info {
+		FDBKey name;
+		uint64_t streamId;
+		FDBKeyRange keyRange;
+		int64_t minVersion;
+	};
+
+	using FDBNativeCdcMutation = struct native_cdc_mutation {
+		uint8_t type;
+		const uint8_t* param1;
+		int param1Length;
+		const uint8_t* param2;
+		int param2Length;
+	};
+
+	using FDBNativeCdcVersionedMutations = struct native_cdc_versioned_mutations {
+		int64_t version;
+		const FDBNativeCdcMutation* mutations;
+		int mutationCount;
+	};
+
 #pragma pack(pop)
 
-	typedef struct readgranulecontext {
-		// User context to pass along to functions
-		void* userContext;
-
-		// Returns a unique id for the load. Asynchronous to support queueing multiple in parallel.
-		int64_t (*start_load_f)(const char* filename,
-		                        int filenameLength,
-		                        int64_t offset,
-		                        int64_t length,
-		                        int64_t fullFileLength,
-		                        void* context);
-
-		// Returns data for the load. Pass the loadId returned by start_load_f
-		uint8_t* (*get_load_f)(int64_t loadId, void* context);
-
-		// Frees data from load. Pass the loadId returned by start_load_f
-		void (*free_load_f)(int64_t loadId, void* context);
-
-		// set this to true for testing if you don't want to read the granule files, just
-		// do the request to the blob workers
-		fdb_bool_t debugNoMaterialize;
-
-		// number of granules to load in parallel (default 1)
-		int granuleParallelism;
-	} FDBReadBlobGranuleContext;
-
-	typedef void (*FDBCallback)(FDBFuture* future, void* callback_parameter);
+	using FDBCallback = void (*)(FDBFuture*, void*);
 
 	// Network
 	fdb_error_t (*selectApiVersion)(int runtimeVersion, int headerVersion);
@@ -142,10 +130,6 @@ struct FdbCApi : public ThreadSafeReferenceCounted<FdbCApi> {
 	fdb_error_t (*createDatabaseFromConnectionString)(const char* connectionString, FDBDatabase** db);
 
 	// Database
-	fdb_error_t (*databaseOpenTenant)(FDBDatabase* database,
-	                                  uint8_t const* tenantName,
-	                                  int tenantNameLength,
-	                                  FDBTenant** outTenant);
 	fdb_error_t (*databaseCreateTransaction)(FDBDatabase* database, FDBTransaction** tr);
 	fdb_error_t (*databaseSetOption)(FDBDatabase* database,
 	                                 FDBDatabaseOption option,
@@ -169,117 +153,27 @@ struct FdbCApi : public ThreadSafeReferenceCounted<FdbCApi> {
 	double (*databaseGetMainThreadBusyness)(FDBDatabase* database);
 	FDBFuture* (*databaseGetServerProtocol)(FDBDatabase* database, uint64_t expectedVersion);
 
-	FDBFuture* (*databasePurgeBlobGranules)(FDBDatabase* db,
-	                                        uint8_t const* begin_key_name,
-	                                        int begin_key_name_length,
-	                                        uint8_t const* end_key_name,
-	                                        int end_key_name_length,
-	                                        int64_t purge_version,
-	                                        fdb_bool_t force);
-
-	FDBFuture* (*databaseWaitPurgeGranulesComplete)(FDBDatabase* db,
-	                                                uint8_t const* purge_key_name,
-	                                                int purge_key_name_length);
-
-	FDBFuture* (*databaseBlobbifyRange)(FDBDatabase* db,
-	                                    uint8_t const* begin_key_name,
-	                                    int begin_key_name_length,
-	                                    uint8_t const* end_key_name,
-	                                    int end_key_name_length);
-
-	FDBFuture* (*databaseBlobbifyRangeBlocking)(FDBDatabase* db,
-	                                            uint8_t const* begin_key_name,
-	                                            int begin_key_name_length,
-	                                            uint8_t const* end_key_name,
-	                                            int end_key_name_length);
-
-	FDBFuture* (*databaseUnblobbifyRange)(FDBDatabase* db,
-	                                      uint8_t const* begin_key_name,
-	                                      int begin_key_name_length,
-	                                      uint8_t const* end_key_name,
-	                                      int end_key_name_length);
-
-	FDBFuture* (*databaseListBlobbifiedRanges)(FDBDatabase* db,
-	                                           uint8_t const* begin_key_name,
-	                                           int begin_key_name_length,
-	                                           uint8_t const* end_key_name,
-	                                           int end_key_name_length,
-	                                           int rangeLimit);
-
-	FDBFuture* (*databaseVerifyBlobRange)(FDBDatabase* db,
-	                                      uint8_t const* begin_key_name,
-	                                      int begin_key_name_length,
-	                                      uint8_t const* end_key_name,
-	                                      int end_key_name_length,
-	                                      int64_t version);
-
-	FDBFuture* (*databaseFlushBlobRange)(FDBDatabase* db,
-	                                     uint8_t const* begin_key_name,
-	                                     int begin_key_name_length,
-	                                     uint8_t const* end_key_name,
-	                                     int end_key_name_length,
-	                                     fdb_bool_t compact,
-	                                     int64_t version);
-
 	FDBFuture* (*databaseGetClientStatus)(FDBDatabase* db);
+	FDBFuture* (*databaseRegisterNativeCdcStream)(FDBDatabase* database,
+	                                              uint8_t const* name,
+	                                              int nameLength,
+	                                              uint8_t const* beginKey,
+	                                              int beginKeyLength,
+	                                              uint8_t const* endKey,
+	                                              int endKeyLength);
+	FDBFuture* (*databaseRemoveNativeCdcStream)(FDBDatabase* database, uint8_t const* name, int nameLength);
+	FDBFuture* (*databaseListNativeCdcStreams)(FDBDatabase* database);
+	FDBFuture* (*databaseCreateNativeCdcConsumer)(FDBDatabase* database, uint8_t const* name, int nameLength);
+	FDBFuture* (*databaseResumeNativeCdcConsumer)(FDBDatabase* database,
+	                                              uint64_t streamId,
+	                                              int64_t lastConsumedVersion);
 
-	// Tenant
-	fdb_error_t (*tenantCreateTransaction)(FDBTenant* tenant, FDBTransaction** outTransaction);
-
-	FDBFuture* (*tenantPurgeBlobGranules)(FDBTenant* db,
-	                                      uint8_t const* begin_key_name,
-	                                      int begin_key_name_length,
-	                                      uint8_t const* end_key_name,
-	                                      int end_key_name_length,
-	                                      int64_t purge_version,
-	                                      fdb_bool_t force);
-
-	FDBFuture* (*tenantWaitPurgeGranulesComplete)(FDBTenant* db,
-	                                              uint8_t const* purge_key_name,
-	                                              int purge_key_name_length);
-
-	FDBFuture* (*tenantBlobbifyRange)(FDBTenant* tenant,
-	                                  uint8_t const* begin_key_name,
-	                                  int begin_key_name_length,
-	                                  uint8_t const* end_key_name,
-	                                  int end_key_name_length);
-
-	FDBFuture* (*tenantBlobbifyRangeBlocking)(FDBTenant* tenant,
-	                                          uint8_t const* begin_key_name,
-	                                          int begin_key_name_length,
-	                                          uint8_t const* end_key_name,
-	                                          int end_key_name_length);
-
-	FDBFuture* (*tenantUnblobbifyRange)(FDBTenant* tenant,
-	                                    uint8_t const* begin_key_name,
-	                                    int begin_key_name_length,
-	                                    uint8_t const* end_key_name,
-	                                    int end_key_name_length);
-
-	FDBFuture* (*tenantListBlobbifiedRanges)(FDBTenant* tenant,
-	                                         uint8_t const* begin_key_name,
-	                                         int begin_key_name_length,
-	                                         uint8_t const* end_key_name,
-	                                         int end_key_name_length,
-	                                         int rangeLimit);
-
-	FDBFuture* (*tenantVerifyBlobRange)(FDBTenant* tenant,
-	                                    uint8_t const* begin_key_name,
-	                                    int begin_key_name_length,
-	                                    uint8_t const* end_key_name,
-	                                    int end_key_name_length,
-	                                    int64_t version);
-
-	FDBFuture* (*tenantFlushBlobRange)(FDBTenant* db,
-	                                   uint8_t const* begin_key_name,
-	                                   int begin_key_name_length,
-	                                   uint8_t const* end_key_name,
-	                                   int end_key_name_length,
-	                                   fdb_bool_t compact,
-	                                   int64_t version);
-
-	FDBFuture* (*tenantGetId)(FDBTenant* tenant);
-	void (*tenantDestroy)(FDBTenant* tenant);
+	void (*nativeCdcConsumerDestroy)(FDBNativeCdcConsumer* consumer);
+	FDBFuture* (*nativeCdcConsumerConsume)(FDBNativeCdcConsumer* consumer);
+	FDBFuture* (*nativeCdcConsumerAcknowledge)(FDBNativeCdcConsumer* consumer);
+	fdb_error_t (*nativeCdcConsumerGetPosition)(FDBNativeCdcConsumer* consumer,
+	                                            uint64_t* outStreamId,
+	                                            int64_t* outLastConsumedVersion);
 
 	// Transaction
 	fdb_error_t (*transactionSetOption)(FDBTransaction* tr,
@@ -329,7 +223,6 @@ struct FdbCApi : public ThreadSafeReferenceCounted<FdbCApi> {
 	                                        int targetBytes,
 	                                        FDBStreamingMode mode,
 	                                        int iteration,
-	                                        int matchIndex,
 	                                        fdb_bool_t snapshot,
 	                                        fdb_bool_t reverse);
 	FDBFuture* (*transactionGetVersionstamp)(FDBTransaction* tr);
@@ -364,21 +257,13 @@ struct FdbCApi : public ThreadSafeReferenceCounted<FdbCApi> {
 	                                             uint8_t const* end_key_name,
 	                                             int end_key_name_length,
 	                                             int64_t chunkSize);
-
-	FDBFuture* (*transactionGetBlobGranuleRanges)(FDBTransaction* tr,
-	                                              uint8_t const* begin_key_name,
-	                                              int begin_key_name_length,
-	                                              uint8_t const* end_key_name,
-	                                              int end_key_name_length,
-	                                              int rangeLimit);
-
-	FDBFuture* (*transactionSummarizeBlobGranules)(FDBTransaction* tr,
-	                                               uint8_t const* begin_key_name,
-	                                               int begin_key_name_length,
-	                                               uint8_t const* end_key_name,
-	                                               int end_key_name_length,
-	                                               int64_t summaryVersion,
-	                                               int rangeLimit);
+	FDBFuture* (*transactionGetRangeSplitPointsWithLimit)(FDBTransaction* tr,
+	                                                      uint8_t const* begin_key_name,
+	                                                      int begin_key_name_length,
+	                                                      uint8_t const* end_key_name,
+	                                                      int end_key_name_length,
+	                                                      int64_t chunkSize,
+	                                                      int limit);
 
 	FDBFuture* (*transactionCommit)(FDBTransaction* tr);
 	fdb_error_t (*transactionGetCommittedVersion)(FDBTransaction* tr, int64_t* outVersion);
@@ -417,7 +302,15 @@ struct FdbCApi : public ThreadSafeReferenceCounted<FdbCApi> {
 	                                            FDBMappedKeyValue const** outKVM,
 	                                            int* outCount,
 	                                            fdb_bool_t* outMore);
-	fdb_error_t (*futureGetGranuleSummaryArray)(FDBFuture* f, const FDBGranuleSummary** out_summaries, int* outCount);
+	fdb_error_t (*futureGetNativeCdcStreamInfoArray)(FDBFuture* f,
+	                                                 FDBNativeCdcStreamInfo const** outStreams,
+	                                                 int* outCount);
+	fdb_error_t (*futureGetNativeCdcConsumer)(FDBFuture* f, FDBNativeCdcConsumer** outConsumer);
+	fdb_error_t (*futureGetNativeCdcVersionedMutations)(FDBFuture* f,
+	                                                    FDBNativeCdcVersionedMutations const** outMutations,
+	                                                    int* outCount,
+	                                                    int64_t* outLastConsumedVersion);
+
 	fdb_error_t (*futureGetSharedState)(FDBFuture* f, DatabaseSharedState** outPtr);
 	fdb_error_t (*futureGetResult)(FDBFuture* f, FDBResult** response);
 	fdb_error_t (*futureSetCallback)(FDBFuture* f, FDBCallback callback, void* callback_parameter);
@@ -469,20 +362,14 @@ public:
 	                                               const KeySelectorRef& end,
 	                                               const StringRef& mapper,
 	                                               GetRangeLimits limits,
-	                                               int matchIndex,
 	                                               bool snapshot,
 	                                               bool reverse) override;
 	ThreadFuture<Standalone<VectorRef<const char*>>> getAddressesForKey(const KeyRef& key) override;
 	ThreadFuture<Standalone<StringRef>> getVersionstamp() override;
 	ThreadFuture<int64_t> getEstimatedRangeSizeBytes(const KeyRangeRef& keys) override;
 	ThreadFuture<Standalone<VectorRef<KeyRef>>> getRangeSplitPoints(const KeyRangeRef& range,
-	                                                                int64_t chunkSize) override;
-	ThreadFuture<Standalone<VectorRef<KeyRangeRef>>> getBlobGranuleRanges(const KeyRangeRef& keyRange,
-	                                                                      int rangeLimit) override;
-
-	ThreadFuture<Standalone<VectorRef<BlobGranuleSummaryRef>>> summarizeBlobGranules(const KeyRangeRef& keyRange,
-	                                                                                 Optional<Version> summaryVersion,
-	                                                                                 int rangeLimit) override;
+	                                                                int64_t chunkSize,
+	                                                                int limit = -1) override;
 
 	void addReadConflictRange(const KeyRangeRef& keys) override;
 
@@ -509,10 +396,8 @@ public:
 	ThreadFuture<Void> onError(Error const& e) override;
 	void reset() override;
 
-	Optional<TenantName> getTenant() override {
-		ASSERT(false);
-		throw internal_error();
-	}
+	void debugTrace(BaseTraceEvent&& event) override;
+	void debugPrint(std::string const& message) override;
 
 	void addref() override { ThreadSafeReferenceCounted<DLTransaction>::addref(); }
 	void delref() override { ThreadSafeReferenceCounted<DLTransaction>::delref(); }
@@ -524,38 +409,6 @@ public:
 private:
 	const Reference<FdbCApi> api;
 	FdbCApi::FDBTransaction* const tr;
-};
-
-class DLTenant : public ITenant, ThreadSafeReferenceCounted<DLTenant> {
-public:
-	DLTenant(Reference<FdbCApi> api, FdbCApi::FDBTenant* tenant) : api(api), tenant(tenant) {}
-	~DLTenant() override {
-		if (tenant) {
-			api->tenantDestroy(tenant);
-		}
-	}
-
-	Reference<ITransaction> createTransaction() override;
-
-	ThreadFuture<int64_t> getId() override;
-	ThreadFuture<Key> purgeBlobGranules(const KeyRangeRef& keyRange, Version purgeVersion, bool force) override;
-	ThreadFuture<Void> waitPurgeGranulesComplete(const KeyRef& purgeKey) override;
-
-	ThreadFuture<bool> blobbifyRange(const KeyRangeRef& keyRange) override;
-	ThreadFuture<bool> blobbifyRangeBlocking(const KeyRangeRef& keyRange) override;
-	ThreadFuture<bool> unblobbifyRange(const KeyRangeRef& keyRange) override;
-	ThreadFuture<Standalone<VectorRef<KeyRangeRef>>> listBlobbifiedRanges(const KeyRangeRef& keyRange,
-	                                                                      int rangeLimit) override;
-
-	ThreadFuture<Version> verifyBlobRange(const KeyRangeRef& keyRange, Optional<Version> version) override;
-	ThreadFuture<bool> flushBlobRange(const KeyRangeRef& keyRange, bool compact, Optional<Version> version) override;
-
-	void addref() override { ThreadSafeReferenceCounted<DLTenant>::addref(); }
-	void delref() override { ThreadSafeReferenceCounted<DLTenant>::delref(); }
-
-private:
-	const Reference<FdbCApi> api;
-	FdbCApi::FDBTenant* tenant;
 };
 
 // An implementation of IDatabase that wraps a database object created on an externally loaded client library.
@@ -572,7 +425,6 @@ public:
 
 	ThreadFuture<Void> onReady();
 
-	Reference<ITenant> openTenant(TenantNameRef tenantName) override;
 	Reference<ITransaction> createTransaction() override;
 	void setOption(FDBDatabaseOptions::Option option, Optional<StringRef> value = Optional<StringRef>()) override;
 	double getMainThreadBusyness() override;
@@ -589,18 +441,11 @@ public:
 	ThreadFuture<int64_t> rebootWorker(const StringRef& address, bool check, int duration) override;
 	ThreadFuture<Void> forceRecoveryWithDataLoss(const StringRef& dcid) override;
 	ThreadFuture<Void> createSnapshot(const StringRef& uid, const StringRef& snapshot_command) override;
-
-	ThreadFuture<Key> purgeBlobGranules(const KeyRangeRef& keyRange, Version purgeVersion, bool force) override;
-	ThreadFuture<Void> waitPurgeGranulesComplete(const KeyRef& purgeKey) override;
-
-	ThreadFuture<bool> blobbifyRange(const KeyRangeRef& keyRange) override;
-	ThreadFuture<bool> blobbifyRangeBlocking(const KeyRangeRef& keyRange) override;
-	ThreadFuture<bool> unblobbifyRange(const KeyRangeRef& keyRange) override;
-	ThreadFuture<Standalone<VectorRef<KeyRangeRef>>> listBlobbifiedRanges(const KeyRangeRef& keyRange,
-	                                                                      int rangeLimit) override;
-
-	ThreadFuture<Version> verifyBlobRange(const KeyRangeRef& keyRange, Optional<Version> version) override;
-	ThreadFuture<bool> flushBlobRange(const KeyRangeRef& keyRange, bool compact, Optional<Version> version) override;
+	ThreadFuture<CDCStreamId> registerNativeCdcStream(const KeyRef& name, const KeyRangeRef& keys) override;
+	ThreadFuture<Void> removeNativeCdcStream(const KeyRef& name) override;
+	ThreadFuture<std::vector<NativeCdcStreamInfo>> listNativeCdcStreams() override;
+	ThreadFuture<Reference<INativeCdcConsumer>> createNativeCdcConsumer(const KeyRef& name) override;
+	ThreadFuture<Reference<INativeCdcConsumer>> resumeNativeCdcConsumer(const NativeCdcCursor& cursor) override;
 
 	ThreadFuture<DatabaseSharedState*> createSharedState() override;
 	void setSharedState(DatabaseSharedState* p) override;
@@ -619,7 +464,7 @@ private:
 // The DL prefix stands for "dynamic library".
 class DLApi : public IClientApi {
 public:
-	DLApi(std::string fdbCPath, bool unlinkOnLoad = false);
+	explicit DLApi(std::string fdbCPath, bool unlinkOnLoad = false);
 
 	void selectApiVersion(int apiVersion) override;
 	const char* getClientVersion() override;
@@ -653,7 +498,6 @@ private:
 };
 
 class MultiVersionDatabase;
-class MultiVersionTenant;
 
 // An implementation of ITransaction that wraps a transaction created either locally or through a dynamically loaded
 // external client. When needed (e.g on cluster version change), the MultiVersionTransaction can automatically replace
@@ -661,7 +505,6 @@ class MultiVersionTenant;
 class MultiVersionTransaction : public ITransaction, ThreadSafeReferenceCounted<MultiVersionTransaction> {
 public:
 	MultiVersionTransaction(Reference<MultiVersionDatabase> db,
-	                        Optional<Reference<MultiVersionTenant>> tenant,
 	                        UniqueOrderedOptionList<FDBTransactionOptions> defaultOptions);
 
 	~MultiVersionTransaction() override;
@@ -694,7 +537,6 @@ public:
 	                                               const KeySelectorRef& end,
 	                                               const StringRef& mapper,
 	                                               GetRangeLimits limits,
-	                                               int matchIndex,
 	                                               bool snapshot,
 	                                               bool reverse) override;
 	ThreadFuture<Standalone<VectorRef<const char*>>> getAddressesForKey(const KeyRef& key) override;
@@ -704,13 +546,8 @@ public:
 	ThreadFuture<int64_t> getEstimatedRangeSizeBytes(const KeyRangeRef& keys) override;
 
 	ThreadFuture<Standalone<VectorRef<KeyRef>>> getRangeSplitPoints(const KeyRangeRef& range,
-	                                                                int64_t chunkSize) override;
-	ThreadFuture<Standalone<VectorRef<KeyRangeRef>>> getBlobGranuleRanges(const KeyRangeRef& keyRange,
-	                                                                      int rangeLimit) override;
-
-	ThreadFuture<Standalone<VectorRef<BlobGranuleSummaryRef>>> summarizeBlobGranules(const KeyRangeRef& keyRange,
-	                                                                                 Optional<Version> summaryVersion,
-	                                                                                 int rangeLimit) override;
+	                                                                int64_t chunkSize,
+	                                                                int limit = -1) override;
 
 	void atomicOp(const KeyRef& key, const ValueRef& value, uint32_t operationType) override;
 	void set(const KeyRef& key, const ValueRef& value) override;
@@ -735,21 +572,20 @@ public:
 	ThreadFuture<Void> onError(Error const& e) override;
 	void reset() override;
 
-	Optional<TenantName> getTenant() override;
-
 	void addref() override { ThreadSafeReferenceCounted<MultiVersionTransaction>::addref(); }
 	void delref() override { ThreadSafeReferenceCounted<MultiVersionTransaction>::delref(); }
 
 	// return true if the underlying transaction pointer is not empty
 	bool isValid() override;
 
-	ThreadFuture<ApiResult> execAsyncRequest(ApiRequest request) override;
-
-	FDBAllocatorIfc* getAllocatorInterface() override;
+	// These currently only work for local clients. To support external clients,
+	// we would likely need to store the events/messages in the MVC layer and add a hook
+	// here to commit.
+	void debugTrace(BaseTraceEvent&& event) override;
+	void debugPrint(std::string const& message) override;
 
 private:
 	const Reference<MultiVersionDatabase> db;
-	const Optional<Reference<MultiVersionTenant>> tenant;
 	ThreadSpinLock lock;
 
 	struct TransactionInfo {
@@ -817,7 +653,7 @@ struct ClientInfo : ClientDesc, ThreadSafeReferenceCounted<ClientInfo> {
 	ClientInfo()
 	  : ClientDesc(std::string(), false, false), protocolVersion(0), api(nullptr), failed(true), initialized(false),
 	    threadIndex(0) {}
-	ClientInfo(IClientApi* api)
+	explicit ClientInfo(IClientApi* api)
 	  : ClientDesc("internal", false, false), protocolVersion(0), api(api), failed(false), initialized(false),
 	    threadIndex(0) {}
 	ClientInfo(IClientApi* api, std::string libPath, bool useFutureVersion, int threadIndex)
@@ -830,60 +666,6 @@ struct ClientInfo : ClientDesc, ThreadSafeReferenceCounted<ClientInfo> {
 };
 
 class MultiVersionApi;
-
-// An implementation of ITenant that wraps a tenant created either locally or through a dynamically loaded
-// external client. The wrapped ITenant is automatically changed when the MultiVersionDatabase used to create
-// it connects with a different version.
-class MultiVersionTenant final : public ITenant, ThreadSafeReferenceCounted<MultiVersionTenant> {
-public:
-	MultiVersionTenant(Reference<MultiVersionDatabase> db, TenantNameRef tenantName);
-	~MultiVersionTenant() override;
-
-	Reference<ITransaction> createTransaction() override;
-
-	template <class T, class... Args>
-	ThreadFuture<T> executeOperation(ThreadFuture<T> (ITenant::*func)(Args...), Args&&... args);
-
-	ThreadFuture<int64_t> getId() override;
-	ThreadFuture<Key> purgeBlobGranules(const KeyRangeRef& keyRange, Version purgeVersion, bool force) override;
-	ThreadFuture<Void> waitPurgeGranulesComplete(const KeyRef& purgeKey) override;
-
-	ThreadFuture<bool> blobbifyRange(const KeyRangeRef& keyRange) override;
-	ThreadFuture<bool> blobbifyRangeBlocking(const KeyRangeRef& keyRange) override;
-	ThreadFuture<bool> unblobbifyRange(const KeyRangeRef& keyRange) override;
-	ThreadFuture<Standalone<VectorRef<KeyRangeRef>>> listBlobbifiedRanges(const KeyRangeRef& keyRange,
-	                                                                      int rangeLimit) override;
-	ThreadFuture<Version> verifyBlobRange(const KeyRangeRef& keyRange, Optional<Version> version) override;
-	ThreadFuture<bool> flushBlobRange(const KeyRangeRef& keyRange, bool compact, Optional<Version> version) override;
-
-	void addref() override { ThreadSafeReferenceCounted<MultiVersionTenant>::addref(); }
-	void delref() override { ThreadSafeReferenceCounted<MultiVersionTenant>::delref(); }
-
-	// A struct that manages the current connection state of the MultiVersionDatabase. This wraps the underlying
-	// IDatabase object that is currently interacting with the cluster.
-	struct TenantState : ThreadSafeReferenceCounted<TenantState> {
-		TenantState(Reference<MultiVersionDatabase> db, TenantNameRef tenantName);
-
-		// Creates a new underlying tenant object whenever the database connection changes. This change is signaled
-		// to open transactions via an AsyncVar.
-		void updateTenant();
-
-		// Cleans up local state to break reference cycles
-		void close();
-
-		Reference<ThreadSafeAsyncVar<Reference<ITenant>>> tenantVar;
-		const TenantName tenantName;
-
-		Reference<MultiVersionDatabase> db;
-
-		Mutex tenantLock;
-		ThreadFuture<Void> tenantUpdater;
-
-		bool closed;
-	};
-
-	Reference<TenantState> tenantState;
-};
 
 class ClusterConnectionRecord {
 private:
@@ -950,7 +732,6 @@ public:
 
 	~MultiVersionDatabase() override;
 
-	Reference<ITenant> openTenant(TenantNameRef tenantName) override;
 	Reference<ITransaction> createTransaction() override;
 	void setOption(FDBDatabaseOptions::Option option, Optional<StringRef> value = Optional<StringRef>()) override;
 	double getMainThreadBusyness() override;
@@ -974,17 +755,11 @@ public:
 	ThreadFuture<int64_t> rebootWorker(const StringRef& address, bool check, int duration) override;
 	ThreadFuture<Void> forceRecoveryWithDataLoss(const StringRef& dcid) override;
 	ThreadFuture<Void> createSnapshot(const StringRef& uid, const StringRef& snapshot_command) override;
-
-	ThreadFuture<Key> purgeBlobGranules(const KeyRangeRef& keyRange, Version purgeVersion, bool force) override;
-	ThreadFuture<Void> waitPurgeGranulesComplete(const KeyRef& purgeKey) override;
-
-	ThreadFuture<bool> blobbifyRange(const KeyRangeRef& keyRange) override;
-	ThreadFuture<bool> blobbifyRangeBlocking(const KeyRangeRef& keyRange) override;
-	ThreadFuture<bool> unblobbifyRange(const KeyRangeRef& keyRange) override;
-	ThreadFuture<Standalone<VectorRef<KeyRangeRef>>> listBlobbifiedRanges(const KeyRangeRef& keyRange,
-	                                                                      int rangeLimit) override;
-	ThreadFuture<Version> verifyBlobRange(const KeyRangeRef& keyRange, Optional<Version> version) override;
-	ThreadFuture<bool> flushBlobRange(const KeyRangeRef& keyRange, bool compact, Optional<Version> version) override;
+	ThreadFuture<CDCStreamId> registerNativeCdcStream(const KeyRef& name, const KeyRangeRef& keys) override;
+	ThreadFuture<Void> removeNativeCdcStream(const KeyRef& name) override;
+	ThreadFuture<std::vector<NativeCdcStreamInfo>> listNativeCdcStreams() override;
+	ThreadFuture<Reference<INativeCdcConsumer>> createNativeCdcConsumer(const KeyRef& name) override;
+	ThreadFuture<Reference<INativeCdcConsumer>> resumeNativeCdcConsumer(const NativeCdcCursor& cursor) override;
 
 	ThreadFuture<DatabaseSharedState*> createSharedState() override;
 	void setSharedState(DatabaseSharedState* p) override;
@@ -993,8 +768,6 @@ public:
 	ThreadFuture<Standalone<StringRef>> getClientStatus() override;
 
 	// private:
-
-	struct LegacyVersionMonitor;
 
 	// Database initialization state
 	enum class InitializationState { INITIALIZING, INITIALIZATION_FAILED, CREATED, INCOMPATIBLE, CLOSED };
@@ -1018,20 +791,16 @@ public:
 		// Must be called from the main thread
 		ThreadFuture<Void> monitorProtocolVersion();
 
-		// Starts version monitors for old client versions that don't support connect packet monitoring (<= 5.0).
-		// Must be called from the main thread
-		void startLegacyVersionMonitors();
-
-		// Set a new database connnection
+		// Set a new database connection
 		void setDatabase(Reference<IDatabase> db);
 
-		// Get database intialization error if initialization failed
+		// Get database initialization error if initialization failed
 		ErrorOr<Void> getInitializationError();
 
 		// Return a JSON string containing database client-side status information
 		Standalone<StringRef> getClientStatus(ErrorOr<Standalone<StringRef>> dbContextStatus);
 
-		// Cleans up state for the legacy version monitors to break reference cycles
+		// Cleans up state for the version monitors to break reference cycles
 		void close();
 
 		Reference<IDatabase> db;
@@ -1056,16 +825,6 @@ public:
 		ThreadFuture<Void> protocolVersionMonitor;
 
 		Future<Void> sharedStateUpdater;
-		bool isConfigDB;
-
-		// Versions older than 6.1 do not benefit from having their database connections closed. Additionally,
-		// there are various issues that result in negative behavior in some cases if the connections are closed.
-		// Therefore, we leave them open.
-		std::map<ProtocolVersion, Reference<IDatabase>> legacyDatabaseConnections;
-
-		// Versions 5.0 and older do not support connection packet monitoring and require alternate techniques to
-		// determine the cluster version.
-		std::list<Reference<LegacyVersionMonitor>> legacyVersionMonitors;
 
 		Optional<ProtocolVersion> dbProtocolVersion;
 
@@ -1076,30 +835,6 @@ public:
 		std::vector<std::pair<FDBDatabaseOptions::Option, Optional<Standalone<StringRef>>>> options;
 		UniqueOrderedOptionList<FDBTransactionOptions> transactionDefaultOptions;
 		Mutex optionLock;
-	};
-
-	// A struct that enables monitoring whether the cluster is running an old version (<= 5.0) that doesn't support
-	// connect packet monitoring.
-	struct LegacyVersionMonitor : ThreadSafeReferenceCounted<LegacyVersionMonitor> {
-		LegacyVersionMonitor(Reference<ClientInfo> const& client) : client(client), monitorRunning(false) {}
-
-		// Terminates the version monitor to break reference cycles
-		void close();
-
-		// Starts the connection monitor by creating a database object at an old version.
-		// Must be called from the main thread
-		void startConnectionMonitor(Reference<DatabaseState> dbState);
-
-		// Runs a GRV probe on the cluster to determine if the client version is compatible with the cluster.
-		// Must be called from main thread
-		void runGrvProbe(Reference<DatabaseState> dbState);
-
-		Reference<ClientInfo> client;
-		Reference<IDatabase> db;
-		Reference<ITransaction> tr;
-
-		ThreadFuture<Void> versionMonitor;
-		bool monitorRunning;
 	};
 
 	const Reference<DatabaseState> dbState;
@@ -1142,6 +877,7 @@ public:
 	bool hasNonFailedExternalClients();
 
 	void updateSupportedVersions();
+	void ignoreEnvironmentVariableNetworkOption(FDBNetworkOptions::Option option);
 
 	bool callbackOnMainThread;
 	bool localClientDisabled;
@@ -1200,6 +936,7 @@ private:
 	Mutex lock;
 	std::vector<std::pair<FDBNetworkOptions::Option, Optional<Standalone<StringRef>>>> options;
 	std::map<FDBNetworkOptions::Option, std::set<Standalone<StringRef>>> setEnvOptions;
+	std::set<FDBNetworkOptions::Option> ignoredEnvOptions;
 	volatile bool envOptionsLoaded;
 
 	friend struct MultiVersionDatabase::DatabaseState;

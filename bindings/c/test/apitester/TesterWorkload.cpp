@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -159,7 +159,6 @@ void WorkloadBase::doExecute(TOpStartFct startFct,
 		    }
 		    scheduledTaskDone();
 	    },
-	    tenant,
 	    transactional,
 	    maxTxTimeoutMs > 0);
 }
@@ -172,7 +171,7 @@ void WorkloadBase::error(const std::string& msg) {
 	fmt::print(stderr, "[{}] ERROR: {}\n", workloadId, msg);
 	numErrors++;
 	if (numErrors > maxErrors && !failed) {
-		fmt::print(stderr, "[{}] ERROR: Stopping workload after {} errors\n", workloadId, numErrors);
+		fmt::print(stderr, "[{}] ERROR: Stopping workload after {} errors\n", workloadId, numErrors.load());
 		failed = true;
 	}
 }
@@ -205,14 +204,14 @@ void WorkloadManager::run() {
 	std::vector<std::shared_ptr<IWorkload>> initialWorkloads;
 	{
 		std::unique_lock<std::mutex> lock(mutex);
-		for (auto iter : workloads) {
+		for (const auto& iter : workloads) {
 			initialWorkloads.push_back(iter.second.ref);
 		}
 	}
-	for (auto iter : initialWorkloads) {
+	for (const auto& iter : initialWorkloads) {
 		iter->init(this);
 	}
-	for (auto iter : initialWorkloads) {
+	for (const auto& iter : initialWorkloads) {
 		iter->start();
 	}
 	scheduler->join();
@@ -226,7 +225,7 @@ void WorkloadManager::run() {
 	if (failed()) {
 		fmt::print(stderr, "{} workloads failed\n", numWorkloadsFailed);
 	} else {
-		fprintf(stderr, "All workloads succesfully completed\n");
+		fprintf(stderr, "All workloads successfully completed\n");
 	}
 }
 
@@ -244,6 +243,7 @@ void WorkloadManager::workloadDone(IWorkload* workload, bool failed) {
 	bool done = workloads.empty();
 	lock.unlock();
 	if (done) {
+		statsStopped.store(true);
 		if (statsTimer) {
 			statsTimer->cancel();
 		}
@@ -266,7 +266,7 @@ void WorkloadManager::readControlInput(std::string pipeName) {
 	// Open in binary mode and read char-by-char to avoid
 	// any kind of buffering
 	FILE* f = fopen(pipeName.c_str(), "rb");
-	setbuf(f, NULL);
+	setbuf(f, nullptr);
 	std::string line;
 	while (true) {
 		int ch = fgetc(f);
@@ -274,7 +274,7 @@ void WorkloadManager::readControlInput(std::string pipeName) {
 			return;
 		}
 		if (ch != '\n') {
-			line += ch;
+			line += static_cast<char>(ch);
 			continue;
 		}
 		if (line.empty()) {
@@ -292,7 +292,10 @@ void WorkloadManager::readControlInput(std::string pipeName) {
 
 void WorkloadManager::schedulePrintStatistics(int timeIntervalMs) {
 	statsTimer = scheduler->scheduleWithDelay(timeIntervalMs, [this, timeIntervalMs]() {
-		for (auto workload : getActiveWorkloads()) {
+		if (statsStopped.load()) {
+			return;
+		}
+		for (const auto& workload : getActiveWorkloads()) {
 			workload->printStats();
 		}
 		this->schedulePrintStatistics(timeIntervalMs);
@@ -302,7 +305,7 @@ void WorkloadManager::schedulePrintStatistics(int timeIntervalMs) {
 std::vector<std::shared_ptr<IWorkload>> WorkloadManager::getActiveWorkloads() {
 	std::unique_lock<std::mutex> lock(mutex);
 	std::vector<std::shared_ptr<IWorkload>> res;
-	for (auto iter : workloads) {
+	for (const auto& iter : workloads) {
 		res.push_back(iter.second.ref);
 	}
 	return res;

@@ -95,10 +95,12 @@ def collect_syms(f):
         elif toc is not None:
             sym = parse_row(words, toc, ["Value"])
             name = sym["Name"]
+            if not name:
+                continue
             if name in syms_set:
                 continue
             syms_set.add(name)
-            sym["Size"] = int(sym["Size"], 0)  # Readelf is inconistent on Size format
+            sym["Size"] = int(sym["Size"], 0)  # Readelf is inconsistent on Size format
             if "@" in name:
                 sym["Default"] = "@@" in name
                 name, ver = re.split(r"@+", name)
@@ -115,6 +117,7 @@ def collect_syms(f):
     # Also collected demangled names
     if syms:
         out, _ = run(["c++filt"], "\n".join((sym["Name"] for sym in syms)))
+        out = out.rstrip("\n")  # Some c++filts append newlines at the end
         for i, name in enumerate(out.split("\n")):
             syms[i]["Demangled Name"] = name
 

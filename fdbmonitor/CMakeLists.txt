@@ -1,9 +1,17 @@
 set(FDBMONITOR_SRCS fdbmonitor.cpp)
+set(FDBMONITOR_LIB_SRCS fdbmonitor_lib.cpp)
+set(FDBMONITOR_TEST_SRCS fdbmonitor_tests.cpp)
 
 add_executable(fdbmonitor ${FDBMONITOR_SRCS})
+add_library(fdbmonitor_lib STATIC ${FDBMONITOR_LIB_SRCS})
+add_executable(fdbmonitor_tests ${FDBMONITOR_TEST_SRCS})
+
 get_target_property(fdbclient_target_includes fdbclient INCLUDE_DIRECTORIES)
-target_link_libraries(fdbmonitor PUBLIC SimpleOpt)
-target_include_directories(fdbmonitor PUBLIC "${fdbclient_target_includes}")
+target_link_libraries(fdbmonitor_lib PUBLIC SimpleOpt)
+target_link_libraries(fdbmonitor PUBLIC fdbmonitor_lib)
+target_link_libraries(fdbmonitor_tests PUBLIC fdbmonitor_lib)
+target_include_directories(fdbmonitor_lib PUBLIC "${fdbclient_target_includes}")
+target_include_directories(fdbmonitor_tests PUBLIC "${fdbclient_target_includes}")
 strip_debug_symbols(fdbmonitor)
 if(UNIX AND NOT APPLE)
   target_link_libraries(fdbmonitor PRIVATE rt)
@@ -29,10 +37,10 @@ if(NOT "${fdbmonitor_options}" STREQUAL "fdbmonitor_options-NOTFOUND")
 endif()
 
 if(GENERATE_DEBUG_PACKAGES)
-  fdb_install(TARGETS fdbmonitor DESTINATION fdbmonitor COMPONENT server)
+  fdb_install(TARGETS fdbmonitor DESTINATION sbin COMPONENT server)
 else()
   add_custom_target(prepare_fdbmonitor_install ALL DEPENDS strip_only_fdbmonitor)
-  fdb_install(PROGRAMS ${CMAKE_BINARY_DIR}/packages/bin/fdbmonitor DESTINATION fdbmonitor COMPONENT server)
+  fdb_install(PROGRAMS ${CMAKE_BINARY_DIR}/packages/bin/fdbmonitor DESTINATION sbin COMPONENT server)
 endif()
 
 # Create a local sandbox for quick manual testing without simulator
@@ -62,4 +70,9 @@ endif()
 add_custom_target(generate_profile
   COMMAND ${CMAKE_BINARY_DIR}/contrib/generate_profile.sh ${CMAKE_BINARY_DIR})
 
-add_dependencies(generate_profile fdbmonitor fdbserver mako fdbcli)
+add_dependencies(generate_profile fdbmonitor fdbserver fdbcli)
+if(TARGET mako)
+  add_dependencies(generate_profile mako)
+endif()
+
+add_test(NAME fdbmonitor_tests COMMAND fdbmonitor_tests)

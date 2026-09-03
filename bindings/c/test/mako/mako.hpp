@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -53,9 +53,6 @@ constexpr const int MODE_REPORT = 3;
 enum ArgKind {
 	ARG_KEYLEN,
 	ARG_VALLEN,
-	ARG_ACTIVE_TENANTS,
-	ARG_TOTAL_TENANTS,
-	ARG_TENANT_BATCH_SIZE,
 	ARG_TPS,
 	ARG_ASYNC,
 	ARG_COMMITGET,
@@ -91,6 +88,8 @@ enum ArgKind {
 	ARG_ENABLE_TOKEN_BASED_AUTHORIZATION,
 	ARG_TRANSACTION_TIMEOUT_TX,
 	ARG_TRANSACTION_TIMEOUT_DB,
+	ARG_WARMUP_SECONDS,
+	ARG_MAX_GRV_QUEUE_DELAY,
 };
 
 constexpr const int OP_COUNT = 0;
@@ -104,6 +103,7 @@ enum OpKind {
 	OP_GETRANGE,
 	OP_SGET,
 	OP_SGETRANGE,
+	OP_STATUSJSON,
 	OP_UPDATE,
 	OP_INSERT,
 	OP_INSERTRANGE,
@@ -144,9 +144,7 @@ constexpr const int MAX_REPORT_FILES = 200;
 struct Arguments {
 	Arguments();
 	int validate();
-	void collectTenantIds();
 	bool isAuthorizationEnabled() const noexcept;
-	std::optional<std::vector<fdb::Tenant>> prepareTenants(fdb::Database db) const;
 	void generateAuthorizationTokens();
 
 	// Needs to be called once per fdb client process from a clean state:
@@ -164,6 +162,7 @@ struct Arguments {
 	double load_factor;
 	int row_digits;
 	int seconds;
+	int warmup_seconds;
 	int iteration;
 	int tpsmax;
 	int tpsmin;
@@ -172,9 +171,6 @@ struct Arguments {
 	int sampling;
 	int key_length;
 	int value_length;
-	int active_tenants;
-	int total_tenants;
-	int tenant_batch_size;
 	int zipf;
 	int commit_get;
 	int verbose;
@@ -209,16 +205,18 @@ struct Arguments {
 	std::optional<std::string> tls_ca_file;
 	std::optional<std::string> keypair_id;
 	std::optional<std::string> private_key_pem;
-	std::map<std::string, std::string> authorization_tokens; // maps tenant name to token string
-	std::vector<int64_t> tenant_ids; // maps tenant index to tenant id for signing tokens
 	int transaction_timeout_db;
 	int transaction_timeout_tx;
+	int max_grv_queue_delay_ms;
 };
 
 // helper functions
-inline void setTransactionTimeoutIfEnabled(const Arguments& args, fdb::Transaction& tx) {
+inline void setTransactionOptionsIfEnabled(const Arguments& args, fdb::Transaction& tx) {
 	if (args.transaction_timeout_tx > 0) {
 		tx.setOption(FDB_TR_OPTION_TIMEOUT, args.transaction_timeout_tx);
+	}
+	if (args.max_grv_queue_delay_ms > 0) {
+		tx.setOption(FDB_TR_OPTION_MAX_GRV_QUEUE_DELAY, args.max_grv_queue_delay_ms);
 	}
 }
 

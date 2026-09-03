@@ -4,7 +4,7 @@
 #
 # This source file is part of the FoundationDB open source project
 #
-# Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+# Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@
 # limitations under the License.
 #
 
-import json
 import math
 import os
 import random
@@ -34,7 +33,6 @@ fdb.api_version(int(sys.argv[2]))
 
 import fdb.tuple
 from directory_extension import DirectoryExtension
-from fdb import six
 from fdb.impl import strinc
 from unit_tests import run_unit_tests
 
@@ -104,14 +102,13 @@ class Stack:
 
 class Instruction:
     def __init__(
-        self, tr, stack, op, index, isDatabase=False, isTenant=False, isSnapshot=False
+        self, tr, stack, op, index, isDatabase=False, isSnapshot=False
     ):
         self.tr = tr
         self.stack = stack
         self.op = op
         self.index = index
         self.isDatabase = isDatabase
-        self.isTenant = isTenant
         self.isSnapshot = isSnapshot
 
     def pop(self, count=None, with_idx=False):
@@ -127,7 +124,6 @@ class Tester:
 
     def __init__(self, db, prefix):
         self.db = db
-        self.tenant = None
 
         self.instructions = self.db[fdb.tuple.range((prefix,))]
 
@@ -168,7 +164,7 @@ class Tester:
 
     def new_transaction(self):
         with Tester.tr_map_lock:
-            tr_source = self.tenant if self.tenant is not None else self.db
+            tr_source = self.db
             Tester.tr_map[self.tr_name] = tr_source.create_transaction()
 
     def switch_transaction(self, name):
@@ -186,16 +182,12 @@ class Tester:
             # if op != "PUSH" and op != "SWAP":
             #     print("%d. Instruction is %s" % (idx, op))
 
-            isDatabase = op.endswith(six.u("_DATABASE"))
-            isTenant = op.endswith(six.u("_TENANT"))
-            isSnapshot = op.endswith(six.u("_SNAPSHOT"))
+            isDatabase = op.endswith("_DATABASE")
+            isSnapshot = op.endswith("_SNAPSHOT")
 
             if isDatabase:
                 op = op[:-9]
                 obj = self.db
-            elif isTenant:
-                op = op[:-7]
-                obj = self.tenant if self.tenant else self.db
             elif isSnapshot:
                 op = op[:-9]
                 obj = self.current_transaction().snapshot
@@ -203,37 +195,37 @@ class Tester:
                 obj = self.current_transaction()
 
             inst = Instruction(
-                obj, self.stack, op, idx, isDatabase, isTenant, isSnapshot
+                obj, self.stack, op, idx, isDatabase, isSnapshot
             )
 
             try:
-                if inst.op == six.u("PUSH"):
+                if inst.op == "PUSH":
                     inst.push(op_tuple[1])
-                elif inst.op == six.u("DUP"):
+                elif inst.op == "DUP":
                     inst.stack.push(*self.stack[0])
-                elif inst.op == six.u("EMPTY_STACK"):
+                elif inst.op == "EMPTY_STACK":
                     self.stack = Stack()
-                elif inst.op == six.u("SWAP"):
+                elif inst.op == "SWAP":
                     idx = inst.pop()
                     self.stack[0], self.stack[idx] = self.stack[idx], self.stack[0]
-                elif inst.op == six.u("POP"):
+                elif inst.op == "POP":
                     inst.pop()
-                elif inst.op == six.u("SUB"):
+                elif inst.op == "SUB":
                     a, b = inst.pop(2)
                     inst.push(a - b)
-                elif inst.op == six.u("CONCAT"):
+                elif inst.op == "CONCAT":
                     a, b = inst.pop(2)
                     inst.push(a + b)
-                elif inst.op == six.u("WAIT_FUTURE"):
+                elif inst.op == "WAIT_FUTURE":
                     old_idx, item = inst.pop(with_idx=True)
                     inst.stack.push(old_idx, item)
-                elif inst.op == six.u("NEW_TRANSACTION"):
+                elif inst.op == "NEW_TRANSACTION":
                     self.new_transaction()
-                elif inst.op == six.u("USE_TRANSACTION"):
+                elif inst.op == "USE_TRANSACTION":
                     self.switch_transaction(inst.pop())
-                elif inst.op == six.u("ON_ERROR"):
+                elif inst.op == "ON_ERROR":
                     inst.push(inst.tr.on_error(inst.pop()))
-                elif inst.op == six.u("GET"):
+                elif inst.op == "GET":
                     key = inst.pop()
                     num = random.randint(0, 2)
                     if num == 0:
@@ -247,15 +239,15 @@ class Tester:
                         inst.push(b"RESULT_NOT_PRESENT")
                     else:
                         inst.push(f)
-                elif inst.op == six.u("GET_ESTIMATED_RANGE_SIZE"):
+                elif inst.op == "GET_ESTIMATED_RANGE_SIZE":
                     begin, end = inst.pop(2)
                     obj.get_estimated_range_size_bytes(begin, end).wait()
                     inst.push(b"GOT_ESTIMATED_RANGE_SIZE")
-                elif inst.op == six.u("GET_RANGE_SPLIT_POINTS"):
+                elif inst.op == "GET_RANGE_SPLIT_POINTS":
                     begin, end, chunkSize = inst.pop(3)
                     obj.get_range_split_points(begin, end, chunkSize).wait()
                     inst.push(b"GOT_RANGE_SPLIT_POINTS")
-                elif inst.op == six.u("GET_KEY"):
+                elif inst.op == "GET_KEY":
                     key, or_equal, offset, prefix = inst.pop(4)
                     result = obj.get_key(fdb.KeySelector(key, or_equal, offset))
                     if result.startswith(prefix):
@@ -265,7 +257,7 @@ class Tester:
                     else:
                         inst.push(strinc(prefix))
 
-                elif inst.op == six.u("GET_RANGE"):
+                elif inst.op == "GET_RANGE":
                     begin, end, limit, reverse, mode = inst.pop(5)
                     if limit == 0 and mode == -1 and random.random() < 0.5:
                         if reverse:
@@ -276,12 +268,12 @@ class Tester:
                         r = obj.get_range(begin, end, limit, reverse, mode)
 
                     self.push_range(inst, r)
-                elif inst.op == six.u("GET_RANGE_STARTS_WITH"):
+                elif inst.op == "GET_RANGE_STARTS_WITH":
                     prefix, limit, reverse, mode = inst.pop(4)
                     self.push_range(
                         inst, obj.get_range_startswith(prefix, limit, reverse, mode)
                     )
-                elif inst.op == six.u("GET_RANGE_SELECTOR"):
+                elif inst.op == "GET_RANGE_SELECTOR":
                     (
                         begin_key,
                         begin_or_equal,
@@ -305,19 +297,19 @@ class Tester:
                         r = obj.get_range(beginSel, endSel, limit, reverse, mode)
 
                     self.push_range(inst, r, prefix_filter=prefix)
-                elif inst.op == six.u("GET_READ_VERSION"):
+                elif inst.op == "GET_READ_VERSION":
                     self.last_version = obj.get_read_version().wait()
                     inst.push(b"GOT_READ_VERSION")
-                elif inst.op == six.u("SET"):
+                elif inst.op == "SET":
                     key, value = inst.pop(2)
                     if random.random() < 0.5:
                         obj[key] = value
                     else:
                         obj.set(key, value)
 
-                    if isDatabase or isTenant:
+                    if isDatabase:
                         inst.push(b"RESULT_NOT_PRESENT")
-                elif inst.op == six.u("LOG_STACK"):
+                elif inst.op == "LOG_STACK":
                     prefix = inst.pop()
                     entries = {}
                     while len(self.stack) > 0:
@@ -328,23 +320,23 @@ class Tester:
                             entries = {}
 
                     self.log_stack(self.db, prefix, entries)
-                elif inst.op == six.u("ATOMIC_OP"):
+                elif inst.op == "ATOMIC_OP":
                     opType, key, value = inst.pop(3)
                     getattr(obj, opType.lower())(key, value)
 
-                    if isDatabase or isTenant:
+                    if isDatabase:
                         inst.push(b"RESULT_NOT_PRESENT")
-                elif inst.op == six.u("SET_READ_VERSION"):
+                elif inst.op == "SET_READ_VERSION":
                     inst.tr.set_read_version(self.last_version)
-                elif inst.op == six.u("CLEAR"):
+                elif inst.op == "CLEAR":
                     if random.random() < 0.5:
                         del obj[inst.pop()]
                     else:
                         obj.clear(inst.pop())
 
-                    if isDatabase or isTenant:
+                    if isDatabase:
                         inst.push(b"RESULT_NOT_PRESENT")
-                elif inst.op == six.u("CLEAR_RANGE"):
+                elif inst.op == "CLEAR_RANGE":
                     begin, end = inst.pop(2)
                     num = random.randint(0, 2)
                     if num == 0:
@@ -354,45 +346,45 @@ class Tester:
                     else:
                         obj.__delitem__(slice(begin, end))
 
-                    if isDatabase or isTenant:
+                    if isDatabase:
                         inst.push(b"RESULT_NOT_PRESENT")
-                elif inst.op == six.u("CLEAR_RANGE_STARTS_WITH"):
+                elif inst.op == "CLEAR_RANGE_STARTS_WITH":
                     obj.clear_range_startswith(inst.pop())
-                    if isDatabase or isTenant:
+                    if isDatabase:
                         inst.push(b"RESULT_NOT_PRESENT")
-                elif inst.op == six.u("READ_CONFLICT_RANGE"):
+                elif inst.op == "READ_CONFLICT_RANGE":
                     inst.tr.add_read_conflict_range(inst.pop(), inst.pop())
                     inst.push(b"SET_CONFLICT_RANGE")
-                elif inst.op == six.u("WRITE_CONFLICT_RANGE"):
+                elif inst.op == "WRITE_CONFLICT_RANGE":
                     inst.tr.add_write_conflict_range(inst.pop(), inst.pop())
                     inst.push(b"SET_CONFLICT_RANGE")
-                elif inst.op == six.u("READ_CONFLICT_KEY"):
+                elif inst.op == "READ_CONFLICT_KEY":
                     inst.tr.add_read_conflict_key(inst.pop())
                     inst.push(b"SET_CONFLICT_KEY")
-                elif inst.op == six.u("WRITE_CONFLICT_KEY"):
+                elif inst.op == "WRITE_CONFLICT_KEY":
                     inst.tr.add_write_conflict_key(inst.pop())
                     inst.push(b"SET_CONFLICT_KEY")
-                elif inst.op == six.u("DISABLE_WRITE_CONFLICT"):
+                elif inst.op == "DISABLE_WRITE_CONFLICT":
                     inst.tr.options.set_next_write_no_write_conflict_range()
-                elif inst.op == six.u("COMMIT"):
+                elif inst.op == "COMMIT":
                     inst.push(inst.tr.commit())
-                elif inst.op == six.u("RESET"):
+                elif inst.op == "RESET":
                     inst.tr.reset()
-                elif inst.op == six.u("CANCEL"):
+                elif inst.op == "CANCEL":
                     inst.tr.cancel()
-                elif inst.op == six.u("GET_COMMITTED_VERSION"):
+                elif inst.op == "GET_COMMITTED_VERSION":
                     self.last_version = inst.tr.get_committed_version()
                     inst.push(b"GOT_COMMITTED_VERSION")
-                elif inst.op == six.u("GET_APPROXIMATE_SIZE"):
+                elif inst.op == "GET_APPROXIMATE_SIZE":
                     inst.tr.get_approximate_size().wait()
                     inst.push(b"GOT_APPROXIMATE_SIZE")
-                elif inst.op == six.u("GET_VERSIONSTAMP"):
+                elif inst.op == "GET_VERSIONSTAMP":
                     inst.push(inst.tr.get_versionstamp())
-                elif inst.op == six.u("TUPLE_PACK"):
+                elif inst.op == "TUPLE_PACK":
                     count = inst.pop()
                     items = inst.pop(count)
                     inst.push(fdb.tuple.pack(tuple(items)))
-                elif inst.op == six.u("TUPLE_PACK_WITH_VERSIONSTAMP"):
+                elif inst.op == "TUPLE_PACK_WITH_VERSIONSTAMP":
                     prefix = inst.pop()
                     count = inst.pop()
                     items = inst.pop(count)
@@ -413,26 +405,23 @@ class Tester:
                                 inst.push(b"ERROR: NONE")
                             else:
                                 inst.push(b"ERROR: MULTIPLE")
-                elif inst.op == six.u("TUPLE_UNPACK"):
+                elif inst.op == "TUPLE_UNPACK":
                     for i in fdb.tuple.unpack(inst.pop()):
                         inst.push(fdb.tuple.pack((i,)))
-                elif inst.op == six.u("TUPLE_SORT"):
+                elif inst.op == "TUPLE_SORT":
                     count = inst.pop()
                     items = inst.pop(count)
                     unpacked = map(fdb.tuple.unpack, items)
-                    if six.PY3:
-                        sorted_items = sorted(unpacked, key=fdb.tuple.pack)
-                    else:
-                        sorted_items = sorted(unpacked, cmp=fdb.tuple.compare)
+                    sorted_items = sorted(unpacked, key=fdb.tuple.pack)
                     for item in sorted_items:
                         inst.push(fdb.tuple.pack(item))
-                elif inst.op == six.u("TUPLE_RANGE"):
+                elif inst.op == "TUPLE_RANGE":
                     count = inst.pop()
                     items = inst.pop(count)
                     r = fdb.tuple.range(tuple(items))
                     inst.push(r.start)
                     inst.push(r.stop)
-                elif inst.op == six.u("ENCODE_FLOAT"):
+                elif inst.op == "ENCODE_FLOAT":
                     f_bytes = inst.pop()
                     f = struct.unpack(">f", f_bytes)[0]
                     if (
@@ -443,66 +432,30 @@ class Tester:
                     ):
                         f = int(f)
                     inst.push(fdb.tuple.SingleFloat(f))
-                elif inst.op == six.u("ENCODE_DOUBLE"):
+                elif inst.op == "ENCODE_DOUBLE":
                     d_bytes = inst.pop()
                     d = struct.unpack(">d", d_bytes)[0]
                     inst.push(d)
-                elif inst.op == six.u("DECODE_FLOAT"):
+                elif inst.op == "DECODE_FLOAT":
                     f = inst.pop()
                     f_bytes = struct.pack(">f", f.value)
                     inst.push(f_bytes)
-                elif inst.op == six.u("DECODE_DOUBLE"):
+                elif inst.op == "DECODE_DOUBLE":
                     d = inst.pop()
                     d_bytes = struct.pack(">d", d)
                     inst.push(d_bytes)
-                elif inst.op == six.u("START_THREAD"):
+                elif inst.op == "START_THREAD":
                     t = Tester(self.db, inst.pop())
                     thr = threading.Thread(target=t.run)
                     thr.start()
                     self.threads.append(thr)
-                elif inst.op == six.u("WAIT_EMPTY"):
+                elif inst.op == "WAIT_EMPTY":
                     prefix = inst.pop()
                     Tester.wait_empty(self.db, prefix)
                     inst.push(b"WAITED_FOR_EMPTY")
-                elif inst.op == six.u("TENANT_CREATE"):
-                    name = inst.pop()
-                    fdb.tenant_management.create_tenant(self.db, name)
-                    inst.push(b"RESULT_NOT_PRESENT")
-                elif inst.op == six.u("TENANT_DELETE"):
-                    name = inst.pop()
-                    fdb.tenant_management.delete_tenant(self.db, name)
-                    inst.push(b"RESULT_NOT_PRESENT")
-                elif inst.op == six.u("TENANT_SET_ACTIVE"):
-                    name = inst.pop()
-                    self.tenant = self.db.open_tenant(name)
-                    self.tenant.get_id().wait()
-                    inst.push(b"SET_ACTIVE_TENANT")
-                elif inst.op == six.u("TENANT_CLEAR_ACTIVE"):
-                    self.tenant = None
-                elif inst.op == six.u("TENANT_LIST"):
-                    begin, end, limit = inst.pop(3)
-                    tenant_list = fdb.tenant_management.list_tenants(
-                        self.db, begin, end, limit
-                    )
-                    result = []
-                    for tenant in tenant_list:
-                        result += [tenant.key]
-                        try:
-                            metadata = json.loads(tenant.value)
-                            _ = metadata["id"]
-                            _ = metadata["prefix"]
-                        except (json.decoder.JSONDecodeError, KeyError):
-                            assert False, "Invalid Tenant Metadata"
-                    inst.push(fdb.tuple.pack(tuple(result)))
-                elif inst.op == six.u("TENANT_GET_ID"):
-                    if self.tenant != None:
-                        self.tenant.get_id().wait()
-                        inst.push(b"GOT_TENANT_ID")
-                    else:
-                        inst.push(b"NO_ACTIVE_TENANT")
-                elif inst.op == six.u("UNIT_TESTS"):
+                elif inst.op == "UNIT_TESTS":
                     run_unit_tests(db)
-                elif inst.op.startswith(six.u("DIRECTORY_")):
+                elif inst.op.startswith("DIRECTORY_"):
                     self.directory_extension.process_instruction(inst)
                 else:
                     raise Exception("Unknown op %s" % inst.op)

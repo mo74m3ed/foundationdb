@@ -32,7 +32,6 @@ set(JAVA_BINDING_SRCS
   src/main/com/apple/foundationdb/DirectBufferPool.java
   src/main/com/apple/foundationdb/FDB.java
   src/main/com/apple/foundationdb/FDBDatabase.java
-  src/main/com/apple/foundationdb/FDBTenant.java
   src/main/com/apple/foundationdb/FDBTransaction.java
   src/main/com/apple/foundationdb/FutureBool.java
   src/main/com/apple/foundationdb/FutureInt64.java
@@ -68,8 +67,6 @@ set(JAVA_BINDING_SRCS
   src/main/com/apple/foundationdb/ReadTransactionContext.java
   src/main/com/apple/foundationdb/subspace/package-info.java
   src/main/com/apple/foundationdb/subspace/Subspace.java
-  src/main/com/apple/foundationdb/Tenant.java
-  src/main/com/apple/foundationdb/TenantManagement.java
   src/main/com/apple/foundationdb/Transaction.java
   src/main/com/apple/foundationdb/TransactionContext.java
   src/main/com/apple/foundationdb/EventKeeper.java
@@ -161,10 +158,14 @@ endif()
 
 if(NOT WIN32 AND NOT APPLE AND NOT OPEN_FOR_IDE)
   target_link_options(java_workloads PRIVATE "LINKER:--version-script=${CMAKE_SOURCE_DIR}/bindings/c/external_workload.map,-z,nodelete")
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "19.0.0")
+    # Needed because symbol "workloadCFactory" is not defined
+    target_link_options(java_workloads PRIVATE "LINKER:--undefined-version")
+  endif()
 endif()
 
 target_include_directories(fdb_java PRIVATE ${JNI_INCLUDE_DIRS})
-# libfdb_java.so is loaded by fdb-java.jar and doesn't need to depened on jvm shared libraries.
+# libfdb_java.so is loaded by fdb-java.jar and doesn't need to depend on jvm shared libraries.
 target_link_libraries(fdb_java PRIVATE fdb_c)
 target_link_libraries(fdb_java PRIVATE fdb_java_native)
 if(APPLE)
@@ -208,6 +209,17 @@ file(WRITE ${MANIFEST_FILE} ${MANIFEST_TEXT})
 add_jar(fdb-java ${JAVA_BINDING_SRCS} ${GENERATED_JAVA_FILES} ${CMAKE_SOURCE_DIR}/LICENSE ${GENERATED_JAVA_DIR}/ApiVersion.java
   OUTPUT_DIR ${PROJECT_BINARY_DIR}/lib VERSION ${FDB_VERSION} MANIFEST ${MANIFEST_FILE} GENERATE_NATIVE_HEADERS fdb_java_native)
 add_dependencies(fdb-java fdb_java_options)
+
+create_javadoc(fdb
+               FILES ${JAVA_BINDING_SRCS} ${GENERATED_JAVA_FILES} ${GENERATED_JAVA_DIR}/ApiVersion.java
+               VERSION ${FDB_VERSION}
+               )
+add_dependencies(fdb_javadoc fdb_java_options) 
+
+add_custom_target(CopyJavadoc
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_BINARY_DIR}/javadoc/fdb ${CMAKE_CURRENT_BINARY_DIR}/../../documentation/html/javadoc
+)
+add_dependencies(CopyJavadoc fdb_javadoc)
 
 if(NOT OPEN_FOR_IDE)
   set(FAT_JAR_BINARIES "NOTFOUND" CACHE STRING
@@ -307,33 +319,31 @@ if(NOT OPEN_FOR_IDE)
     else()
       set(JUNIT_JARS "${CMAKE_BINARY_DIR}/packages")
       # We use Junit libraries for both JUnit and integration testing structures, so download in either case
-      # https://search.maven.org/remotecontent?filepath=org/junit/jupiter/junit-jupiter-engine/5.7.1/junit-jupiter-engine-5.7.1.jar
-      file(DOWNLOAD "https://search.maven.org/remotecontent?filepath=org/junit/jupiter/junit-jupiter-engine/5.7.1/junit-jupiter-engine-5.7.1.jar"
+      file(DOWNLOAD "https://repo1.maven.org/maven2/org/junit/jupiter/junit-jupiter-engine/5.7.1/junit-jupiter-engine-5.7.1.jar"
         ${JUNIT_JARS}/junit-jupiter-engine-5.7.1.jar
         EXPECTED_HASH SHA256=56616c9350b3624f76cffef6b24ce7bb222915bfd5688f96d3cf4cef34f077cb)
-      # https://search.maven.org/remotecontent?filepath=org/junit/jupiter/junit-jupiter-api/5.7.1/junit-jupiter-api-5.7.1.jar
-      file(DOWNLOAD "https://search.maven.org/remotecontent?filepath=org/junit/jupiter/junit-jupiter-api/5.7.1/junit-jupiter-api-5.7.1.jar"
+      file(DOWNLOAD "https://repo1.maven.org/maven2/org/junit/jupiter/junit-jupiter-api/5.7.1/junit-jupiter-api-5.7.1.jar"
         ${JUNIT_JARS}/junit-jupiter-api-5.7.1.jar
         EXPECTED_HASH SHA256=ce7b985bc469e2625759a4ebc45533c70581a05a348278c1d6408e9b2e35e314)
-      file(DOWNLOAD "https://search.maven.org/remotecontent?filepath=org/junit/jupiter/junit-jupiter-params/5.7.1/junit-jupiter-params-5.7.1.jar"
+      file(DOWNLOAD "https://repo1.maven.org/maven2/org/junit/jupiter/junit-jupiter-params/5.7.1/junit-jupiter-params-5.7.1.jar"
         ${JUNIT_JARS}/junit-jupiter-params-5.7.1.jar
         EXPECTED_HASH SHA256=8effdd7f8a4ba5558b568184dee08008b2443c86c673ef81de5861fbc7ef0613)
-      file(DOWNLOAD "https://search.maven.org/remotecontent?filepath=org/junit/platform/junit-platform-commons/1.7.1/junit-platform-commons-1.7.1.jar"
+      file(DOWNLOAD "https://repo1.maven.org/maven2/org/junit/platform/junit-platform-commons/1.7.1/junit-platform-commons-1.7.1.jar"
         ${JUNIT_JARS}/junit-platform-commons-1.7.1.jar
         EXPECTED_HASH SHA256=7c546be86864718fbaceb79fa84ff1d3a516500fc428f1b21d061c2e0fbc5a4b)
-      file(DOWNLOAD "https://search.maven.org/remotecontent?filepath=org/junit/platform/junit-platform-engine/1.7.1/junit-platform-engine-1.7.1.jar"
+      file(DOWNLOAD "https://repo1.maven.org/maven2/org/junit/platform/junit-platform-engine/1.7.1/junit-platform-engine-1.7.1.jar"
         ${JUNIT_JARS}/junit-platform-engine-1.7.1.jar
         EXPECTED_HASH SHA256=37df5a9cd6dbc1f754ba2b46f96b8874a83660e1796bf38c738f022dcf86c23f)
-      file(DOWNLOAD "https://search.maven.org/remotecontent?filepath=org/junit/platform/junit-platform-launcher/1.7.1/junit-platform-launcher-1.7.1.jar"
+      file(DOWNLOAD "https://repo1.maven.org/maven2/org/junit/platform/junit-platform-launcher/1.7.1/junit-platform-launcher-1.7.1.jar"
         ${JUNIT_JARS}/junit-platform-launcher-1.7.1.jar
         EXPECTED_HASH SHA256=3122ac6fb284bc50e3afe46419fc977f94d580e9d3d1ea58805d200b510a99ee)
-      file(DOWNLOAD "https://search.maven.org/remotecontent?filepath=org/junit/platform/junit-platform-console/1.7.1/junit-platform-console-1.7.1.jar"
+      file(DOWNLOAD "https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console/1.7.1/junit-platform-console-1.7.1.jar"
         ${JUNIT_JARS}/junit-platform-console-1.7.1.jar
         EXPECTED_HASH SHA256=11ed48fcdfcea32f2fa98872db7ecba2d49d178f76493e7a149a2242363ad12e)
-      file(DOWNLOAD "https://search.maven.org/remotecontent?filepath=org/apiguardian/apiguardian-api/1.1.1/apiguardian-api-1.1.1.jar"
+      file(DOWNLOAD "https://repo1.maven.org/maven2/org/apiguardian/apiguardian-api/1.1.1/apiguardian-api-1.1.1.jar"
         ${JUNIT_JARS}/apiguardian-api-1.1.1.jar
         EXPECTED_HASH SHA256=fc68f0d28633caccf3980fdf1e99628fba9c49424ee56dc685cd8b4d2a9fefde)
-      file(DOWNLOAD "https://search.maven.org/remotecontent?filepath=org/opentest4j/opentest4j/1.2.0/opentest4j-1.2.0.jar"
+      file(DOWNLOAD "https://repo1.maven.org/maven2/org/opentest4j/opentest4j/1.2.0/opentest4j-1.2.0.jar"
         ${JUNIT_JARS}/opentest4j-1.2.0.jar)
     endif()
 
@@ -359,8 +369,7 @@ if(NOT OPEN_FOR_IDE)
     #
     # ctest . -R java-unit
     #
-    # ctest has lots of flexible command options, so be sure to refer to its documentation if you want to do something specific(documentation
-    # can be found at https://cmake.org/cmake/help/v3.19/manual/ctest.1.html)
+    # ctest has lots of flexible command options, so be sure to refer to its documentation if you want to do something specific.
 
     add_jar(fdb-junit SOURCES ${JAVA_JUNIT_TESTS} ${JUNIT_RESOURCES} INCLUDE_JARS fdb-java
       ${JUNIT_JARS}/junit-jupiter-api-5.7.1.jar

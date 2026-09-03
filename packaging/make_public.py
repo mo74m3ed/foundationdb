@@ -4,7 +4,7 @@
 #
 # This source file is part of the FoundationDB open source project
 #
-# Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+# Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -66,6 +66,8 @@ def makePublic(clusterFile, newAddress, makeTLS):
     for line in f:
         line = line.strip()
         if len(line) > 0:
+            if line[0] == '#':
+                continue
             if clusterStr is not None:
                 invalidClusterFile(clusterFile)
                 return

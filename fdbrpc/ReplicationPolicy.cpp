@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ bool IReplicationPolicy::validateFull(bool solved,
 	std::vector<LocalityEntry> totalSolution(solutionSet);
 
 	// Append the also servers, if any
-	if (alsoServers.size()) {
+	if (!alsoServers.empty()) {
 		totalSolution.reserve(totalSolution.size() + alsoServers.size());
 		totalSolution.insert(totalSolution.end(), alsoServers.begin(), alsoServers.end());
 	}
@@ -77,7 +77,7 @@ bool PolicyOne::selectReplicas(Reference<LocalitySet>& fromServers,
                                std::vector<LocalityEntry> const& alsoServers,
                                std::vector<LocalityEntry>& results) {
 	int totalUsed = 0;
-	if (alsoServers.size()) {
+	if (!alsoServers.empty()) {
 		totalUsed++;
 	} else if (fromServers->size()) {
 		auto randomEntry = fromServers->random();
@@ -89,7 +89,7 @@ bool PolicyOne::selectReplicas(Reference<LocalitySet>& fromServers,
 
 bool PolicyOne::validate(std::vector<LocalityEntry> const& solutionSet,
                          Reference<LocalitySet> const& fromServers) const {
-	return ((solutionSet.size() > 0) && (fromServers->size() > 0));
+	return ((!solutionSet.empty()) && (fromServers->size() > 0));
 }
 
 PolicyAcross::PolicyAcross(int count, std::string const& attribKey, Reference<IReplicationPolicy> const policy)
@@ -99,7 +99,7 @@ PolicyAcross::PolicyAcross(int count, std::string const& attribKey, Reference<IR
 
 PolicyAcross::PolicyAcross() : _policy(new PolicyOne()) {}
 
-PolicyAcross::~PolicyAcross() {}
+PolicyAcross::~PolicyAcross() = default;
 
 // Debug purpose only
 // Trace all record entries to help debug
@@ -174,18 +174,32 @@ bool PolicyAcross::validate(std::vector<LocalityEntry> const& solutionSet,
 	return valid;
 }
 
-// Choose new servers from "least utilized" alsoServers and append the new servers to results
-// fromserverse are the servers that have already been chosen and
-// that should be excluded from being selected as replicas.
-// FIXME: Simplify this function, such as removing unnecessary printf
-// fromServers are the servers that must have;
-// alsoServers are the servers you can choose.
+// alsoServers are the servers that have already been chosen. If "_count"
+// alsoServers match this policy with the same _attrib_key, then the policy is satisfied.
+// Otherwise, choose a different server from fromServers; such "new" servers
+// are returned in "results". If _count servers cannot be found, return false.
 bool PolicyAcross::selectReplicas(Reference<LocalitySet>& fromServers,
                                   std::vector<LocalityEntry> const& alsoServers,
                                   std::vector<LocalityEntry>& results) {
 	int count = 0;
-	AttribKey indexKey = fromServers->keyIndex(_attribKey);
-	auto groupIndexKey = fromServers->getGroupKeyIndex(indexKey);
+
+	AttribKey indexKey;
+	AttribKey groupIndexKey;
+
+	if (fromServers->_localitygroup->_cachedAttribName.present() &&
+	    fromServers->_localitygroup->_cachedAttribName.get() == _attribKey &&
+	    fromServers->_localitygroup->_cachedKey.present()) {
+		indexKey = groupIndexKey = fromServers->_localitygroup->_cachedKey.get();
+	} else {
+		indexKey = fromServers->keyIndex(_attribKey);
+		groupIndexKey = fromServers->getGroupKeyIndex(indexKey);
+		// Only cache known-safe pattern: PolicyAcross(PolicyOne) with maxdepth=2
+		if (isSingleAcrossOverPolicyOne()) {
+			ASSERT_WE_THINK(indexKey == groupIndexKey);
+			fromServers->_localitygroup->_cachedAttribName = _attribKey;
+			fromServers->_localitygroup->_cachedKey = groupIndexKey;
+		}
+	}
 	int resultsSize, resultsAdded;
 	int resultsInit = results.size();
 
@@ -221,7 +235,7 @@ bool PolicyAcross::selectReplicas(Reference<LocalitySet>& fromServers,
 	}
 
 	// Process the remaining results, if present
-	if ((count < _count) && (_addedResults.size())) {
+	if ((count < _count) && (!_addedResults.empty())) {
 		// Sort the added results array
 		std::sort(_addedResults.begin(), _addedResults.end(), PolicyAcross::compareAddedResults);
 		if (g_replicationdebug > 0) {
@@ -276,7 +290,7 @@ bool PolicyAcross::selectReplicas(Reference<LocalitySet>& fromServers,
 			}
 		}
 	}
-	// Clear the return array, if not satified
+	// Clear the return array, if not satisfied
 	if (count < _count) {
 		results.resize(resultsInit);
 		count = 0;
@@ -335,21 +349,14 @@ void testPolicySerialization(Reference<IReplicationPolicy>& policy) {
 }
 
 void testReplicationPolicy(int nTests) {
-	Reference<IReplicationPolicy> policy =
-	    Reference<IReplicationPolicy>(new PolicyAcross(1, "data_hall", Reference<IReplicationPolicy>(new PolicyOne())));
+	Reference<IReplicationPolicy> policy = makeReference<PolicyAcross>(1, "data_hall", makeReference<PolicyOne>());
 	testPolicySerialization(policy);
 
-	policy = Reference<IReplicationPolicy>(
-	    new PolicyAnd({ Reference<IReplicationPolicy>(
-	                        new PolicyAcross(2,
-	                                         "data_center",
-	                                         Reference<IReplicationPolicy>(new PolicyAcross(
-	                                             3, "rack", Reference<IReplicationPolicy>(new PolicyOne()))))),
-	                    Reference<IReplicationPolicy>(
-	                        new PolicyAcross(2,
-	                                         "data_center",
-	                                         Reference<IReplicationPolicy>(new PolicyAcross(
-	                                             2, "data_hall", Reference<IReplicationPolicy>(new PolicyOne()))))) }));
+	policy = Reference<IReplicationPolicy>(new PolicyAnd(
+	    { makeReference<PolicyAcross>(
+	          2, "data_center", makeReference<PolicyAcross>(3, "rack", makeReference<PolicyOne>())),
+	      makeReference<PolicyAcross>(
+	          2, "data_center", makeReference<PolicyAcross>(2, "data_hall", makeReference<PolicyOne>())) }));
 
 	testPolicySerialization(policy);
 }

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -92,7 +92,6 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
                   "grv_proxy",
                   "master",
                   "test",
-                  "storage_cache",
                   "blob_worker"
                ]
             },
@@ -136,9 +135,7 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
                         "ratekeeper",
                         "blob_manager",
                         "blob_worker",
-                        "encrypt_key_proxy",
                         "consistency_scan",
-                        "storage_cache",
                         "router",
                         "coordinator"
                      ]
@@ -158,10 +155,22 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
                      "memory",
                      "memory-1",
                      "memory-2",
-                     "memory-radixtree-beta",
+                     "memory-radixtree",
                      "unknown"
                      ]}
                   },
+                  "rocksdb_metrics":{
+                     "block_cache_hits":12341234,
+                     "block_cache_misses":12341234,
+                     "pending_compaction_bytes":12341234,
+                     "memtable_bytes":12341234,
+                     "sst_reader_bytes":12341234,
+                     "block_cache_usage":12341234,
+                     "block_cache_limit":12341234,
+                     "throttled_commits":12341234,
+                     "write_stall_microseconds":12341234
+                  },
+                  "rocksdb_version":"9.7.3",
                   "data_version":12341234,
                   "durable_version":12341234,
                   "data_lag": {
@@ -194,6 +203,27 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
                      "roughness":0.0
                   },
                   "keys_queried":{
+                     "hz":0.0,
+                     "counter":0,
+                     "roughness":0.0
+                  },
+                  "active_watches":0,
+                  "total_watches":{
+                     "hz":0.0,
+                     "counter":0,
+                     "roughness":0.0
+                  },
+                  "triggered_watches":{
+                     "hz":0.0,
+                     "counter":0,
+                     "roughness":0.0
+                  },
+                  "timed_out_watches":{
+                     "hz":0.0,
+                     "counter":0,
+                     "roughness":0.0
+                  },
+                  "errored_watches":{
                      "hz":0.0,
                      "counter":0,
                      "roughness":0.0
@@ -280,6 +310,102 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
                      "p99":0.0,
                      "p99.9":0.0
                   },
+                  "commit_batch_transactions":{
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_batch_bytes":{
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_batching_waiting":{
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_preresolution_latency":{
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_resolution_latency":{
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_postresolution_latency":{
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_tlog_logging_latency":{
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_reply_latency":{
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
                   "grv_latency_bands":{
                      "$map": 1
                   },
@@ -319,11 +445,11 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
                   "type":"x",
                   "name":{
                      "$enum":[
-                        "file_open_error",
                         "incorrect_cluster_file_contents",
                         "trace_log_file_write_error",
                         "trace_log_could_not_create_file",
                         "trace_log_writer_thread_unresponsive",
+                        "exclude_from_tlog_recruitment_low_disk",
                         "process_error",
                         "io_error",
                         "io_timeout",
@@ -429,9 +555,7 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
                   "log_server_min_free_space",
                   "log_server_min_free_space_ratio",
                   "storage_server_durability_lag",
-                  "storage_server_list_fetch_failed",
-                  "blob_worker_lag",
-                  "blob_worker_missing"
+                  "storage_server_list_fetch_failed"
                ]
             },
             "description":"The database is not being saturated by the workload."
@@ -452,9 +576,7 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
                   "log_server_min_free_space",
                   "log_server_min_free_space_ratio",
                   "storage_server_durability_lag",
-                  "storage_server_list_fetch_failed",
-                  "blob_worker_lag",
-                  "blob_worker_missing"
+                  "storage_server_list_fetch_failed"
                ]
             },
             "description":"The database is not being saturated by the workload."
@@ -500,6 +622,14 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
          "seconds" : 1.0,
          "versions" : 1000000
       },
+      "logserver_lag": {
+         "seconds" : 1.0,
+         "versions" : 1000000
+      },
+      "storageserver_lag": {
+         "seconds" : 1.0,
+         "versions" : 1000000
+      },
       "active_tss_count":0,
       "degraded_processes":0,
       "database_available":true,
@@ -508,6 +638,14 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
          "lock_uid": "00000000000000000000000000000000"
       },
       "generation":2,
+      "gray_failure" : {
+         "excluded_servers" : [
+            {
+               "address": "127.0.0.1:4500",
+               "time": 1731294251
+            }
+         ]
+      },
       "latency_probe":{
          "read_seconds":7,
          "immediate_priority_transaction_start_seconds":0.0,
@@ -561,8 +699,6 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
                   "unreachable_cluster_controller_worker",
                   "unreachable_dataDistributor_worker",
                   "unreachable_ratekeeper_worker",
-                  "unreachable_blobManager_worker",
-                  "unreachable_encryptKeyProxy_worker",
                   "unreachable_consistencyScan_worker",
                   "unreadable_configuration",
                   "full_replication_timeout",
@@ -584,8 +720,7 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
                   "primary_dc_missing",
                   "fetch_primary_dc_timeout",
                   "fetch_storage_wiggler_stats_timeout",
-                  "fetch_consistency_scan_status_timeout",
-                  "metacluster_metrics_missing"
+                  "fetch_consistency_scan_status_timeout"
                ]
             },
             "issues":[
@@ -595,7 +730,8 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
                         "incorrect_cluster_file_contents",
                         "trace_log_file_write_error",
                         "trace_log_could_not_create_file",
-                        "trace_log_writer_thread_unresponsive"
+                        "trace_log_writer_thread_unresponsive",
+                        "exclude_from_tlog_recruitment_low_disk"
                      ]
                   },
                   "description":"Cluster file contents do not match current cluster connection string. Verify cluster file is writable and has not been overwritten externally."
@@ -804,7 +940,7 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
              "memory",
              "memory-1",
              "memory-2",
-             "memory-radixtree-beta"
+             "memory-radixtree"
          ]},
          "log_spill":1,
          "storage_engine":{
@@ -818,7 +954,7 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
              "memory",
              "memory-1",
              "memory-2",
-             "memory-radixtree-beta"
+             "memory-radixtree"
          ]},
          "tss_count":1,
          "tss_storage_engine":{
@@ -832,7 +968,7 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
              "memory",
              "memory-1",
              "memory-2",
-             "memory-radixtree-beta"
+             "memory-radixtree"
          ]},
          "coordinators_count":1,
          "excluded_servers":[
@@ -849,26 +985,29 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
          "grv_proxies":1,
          "proxies":6,
          "backup_worker_enabled":1,
+         "range_partitioned_backup_worker_enabled":1,
+         "range_partitioned_backup_workers":0,
          "perpetual_storage_wiggle":0,
          "perpetual_storage_wiggle_locality":"0",
+         "perpetual_storage_wiggle_engine":{
+         "$enum":[
+             "ssd",
+             "ssd-1",
+             "ssd-2",
+             "ssd-redwood-1",
+             "ssd-rocksdb-v1",
+             "ssd-sharded-rocksdb",
+             "memory",
+             "memory-1",
+             "memory-2",
+             "memory-radixtree-beta",
+             "none"
+         ]},
          "storage_migration_type": {
              "$enum":[
              "disabled",
              "aggressive",
              "gradual"
-         ]},
-         "blob_granules_enabled":0,
-         "tenant_mode": {
-             "$enum":[
-             "disabled",
-             "optional_experimental",
-             "required_experimental"
-         ]},
-         "encryption_at_rest_mode": {
-             "$enum":[
-             "disabled",
-             "domain_aware",
-             "cluster_aware"
          ]}
       },
       "consistency_scan" : {
@@ -1016,23 +1155,6 @@ const KeyRef JSONSchemas::statusSchema = R"statusSchema(
             }
          }
       },
-      "metacluster" : {
-         "cluster_type" : "management",
-         "metacluster_name":"metacluster1",
-         "metacluster_id":12345,
-         "data_cluster_name" : "data_cluster1",
-         "data_cluster_id" : 12346,
-         "num_data_clusters":10
-      },
-      "kms_is_healthy": true,
-      "encryption_at_rest": {
-         "ekp_is_healthy": true
-      },
-      "tenants":{
-         "num_tenants":0,
-         "num_tenant_groups":10,
-         "tenant_group_capacity":20
-      },
       "idempotency_ids":{
          "size_bytes": 0,
          "expired_version": 0,
@@ -1155,7 +1277,10 @@ const KeyRef JSONSchemas::clusterConfigurationSchema = R"configSchema(
     "auto_resolvers":1,
     "auto_logs":3,
     "commit_proxies":5,
-    "grv_proxies":1
+    "grv_proxies":1,
+    "backup_worker_enabled":1,
+    "range_partitioned_backup_worker_enabled":1,
+    "range_partitioned_backup_workers":0
 })configSchema"_sr;
 
 const KeyRef JSONSchemas::latencyBandConfigurationSchema = R"configSchema(
@@ -1182,7 +1307,8 @@ const KeyRef JSONSchemas::latencyBandConfigurationSchema = R"configSchema(
 
 const KeyRef JSONSchemas::dataDistributionStatsSchema = R"""(
 {
-  "shard_bytes": 1947000
+  "shard_bytes": 1947000,
+  "shard_bytes_per_ksecond": 1000000
 }
 )"""_sr;
 
@@ -1220,3 +1346,311 @@ const KeyRef JSONSchemas::managementApiErrorSchema = R"""(
    "message": "The reason of the error"
 }
 )"""_sr;
+
+const KeyRef JSONSchemas::faultToleranceStatusSchema = R"statusSchema(
+{
+   "cluster":{
+      "layers":{
+         "_valid":true,
+         "_error":"some error description"
+      },
+      "logs":[
+         {
+            "log_interfaces":[
+               {
+                  "id":"7f8d623d0cb9966e",
+                  "healthy":true,
+                  "address":"1.2.3.4:1234"
+               }
+            ],
+            "epoch":1,
+            "current":false,
+            "begin_version":23,
+            "end_version":112315141,
+            "possibly_losing_data":true,
+            "log_replication_factor":3,
+            "log_write_anti_quorum":0,
+            "log_fault_tolerance":2,
+            "remote_log_replication_factor":3,
+            "remote_log_fault_tolerance":2,
+            "satellite_log_replication_factor":3,
+            "satellite_log_write_anti_quorum":0,
+            "satellite_log_fault_tolerance":2
+         }
+      ],
+      "fault_tolerance":{
+         "max_zone_failures_without_losing_availability":0,
+         "max_zone_failures_without_losing_data":0
+      },
+      "qos":{
+         "worst_queue_bytes_log_server":460,
+         "batch_performance_limited_by":{
+            "reason_server_id":"7f8d623d0cb9966e",
+            "reason_id":0,
+            "name":{
+               "$enum":[
+                  "workload",
+                  "storage_server_write_queue_size",
+                  "storage_server_write_bandwidth_mvcc",
+                  "storage_server_readable_behind",
+                  "log_server_mvcc_write_bandwidth",
+                  "log_server_write_queue",
+                  "storage_server_min_free_space",
+                  "storage_server_min_free_space_ratio",
+                  "log_server_min_free_space",
+                  "log_server_min_free_space_ratio",
+                  "storage_server_durability_lag",
+                  "storage_server_list_fetch_failed"
+               ]
+            },
+            "description":"The database is not being saturated by the workload."
+         },
+         "performance_limited_by":{
+            "reason_server_id":"7f8d623d0cb9966e",
+            "reason_id":0,
+            "name":{
+               "$enum":[
+                  "workload",
+                  "storage_server_write_queue_size",
+                  "storage_server_write_bandwidth_mvcc",
+                  "storage_server_readable_behind",
+                  "log_server_mvcc_write_bandwidth",
+                  "log_server_write_queue",
+                  "storage_server_min_free_space",
+                  "storage_server_min_free_space_ratio",
+                  "log_server_min_free_space",
+                  "log_server_min_free_space_ratio",
+                  "storage_server_durability_lag",
+                  "storage_server_list_fetch_failed"
+               ]
+            },
+            "description":"The database is not being saturated by the workload."
+         },
+         "batch_transactions_per_second_limit":0,
+         "transactions_per_second_limit":0,
+         "batch_released_transactions_per_second":0,
+         "released_transactions_per_second":0,
+         "throttled_tags":{
+            "auto" : {
+                "busy_read" : 0,
+                "busy_write" : 0,
+                "count" : 0,
+                "recommended_only": 0
+            },
+            "manual" : {
+                "count" : 0
+            }
+         },
+         "limiting_queue_bytes_storage_server":0,
+         "worst_queue_bytes_storage_server":0,
+         "limiting_data_lag_storage_server":{
+            "versions":0,
+            "seconds":0.0
+         },
+         "worst_data_lag_storage_server":{
+            "versions":0,
+            "seconds":0.0
+         },
+         "limiting_durability_lag_storage_server":{
+            "versions":0,
+            "seconds":0.0
+         },
+         "worst_durability_lag_storage_server":{
+            "versions":0,
+            "seconds":0.0
+         }
+      },
+      "messages":[
+         {
+            "reasons":[
+               {
+                  "description":"Blah."
+               }
+            ],
+            "unreachable_processes":[
+               {
+                  "address":"1.2.3.4:1234"
+               }
+            ],
+            "name":{
+               "$enum":[
+                  "unreachable_master_worker",
+                  "unreachable_cluster_controller_worker",
+                  "unreachable_dataDistributor_worker",
+                  "unreachable_ratekeeper_worker",
+                  "unreachable_consistencyScan_worker",
+                  "unreadable_configuration",
+                  "full_replication_timeout",
+                  "client_issues",
+                  "unreachable_processes",
+                  "immediate_priority_transaction_start_probe_timeout",
+                  "batch_priority_transaction_start_probe_timeout",
+                  "transaction_start_probe_timeout",
+                  "read_probe_timeout",
+                  "commit_probe_timeout",
+                  "storage_servers_error",
+                  "status_incomplete",
+                  "layer_status_incomplete",
+                  "database_availability_timeout",
+                  "consistencycheck_suspendkey_fetch_timeout",
+                  "consistencycheck_disabled",
+                  "duplicate_mutation_streams",
+                  "duplicate_mutation_fetch_timeout",
+                  "primary_dc_missing",
+                  "fetch_primary_dc_timeout",
+                  "fetch_storage_wiggler_stats_timeout",
+                  "fetch_consistency_scan_status_timeout"
+               ]
+            },
+            "issues":[
+               {
+                  "name":{
+                     "$enum":[
+                        "incorrect_cluster_file_contents",
+                        "trace_log_file_write_error",
+                        "trace_log_could_not_create_file",
+                        "trace_log_writer_thread_unresponsive"
+                     ]
+                  },
+                  "description":"Cluster file contents do not match current cluster connection string. Verify cluster
+file is writable and has not been overwritten externally."
+               }
+            ],
+            "description":"abc"
+         }
+      ],
+      "recovery_state":{
+         "seconds_since_last_recovered":1,
+         "required_resolvers":1,
+         "required_commit_proxies":1,
+         "required_grv_proxies":1,
+         "name":{
+            "$enum":[
+               "reading_coordinated_state",
+               "locking_coordinated_state",
+               "locking_old_transaction_servers",
+               "reading_transaction_system_state",
+               "configuration_missing",
+               "configuration_never_created",
+               "configuration_invalid",
+               "recruiting_transaction_servers",
+               "initializing_transaction_servers",
+               "recovery_transaction",
+               "writing_coordinated_state",
+               "accepting_commits",
+               "all_logs_recruited",
+               "storage_recovered",
+               "fully_recovered"
+            ]
+         },
+         "required_logs":3,
+         "missing_logs":"7f8d623d0cb9966e",
+         "active_generations":1,
+         "description":"Recovery complete."
+      },
+      "maintenance_zone":"0ccb4e0fdbdb5583010f6b77d9d10ece",
+      "maintenance_seconds_remaining":1.0,
+      "data":{
+         "least_operating_space_bytes_log_server":0,
+         "average_partition_size_bytes":0,
+         "state":{
+            "healthy":true,
+            "min_replicas_remaining":0,
+            "name":{
+               "$enum":[
+                  "initializing",
+                  "missing_data",
+                  "healing",
+                  "optimizing_team_collections",
+                  "healthy_populating_region",
+                  "healthy_repartitioning",
+                  "healthy_removing_server",
+                  "healthy_rebalancing",
+                  "healthy_perpetual_wiggle",
+                  "healthy"
+               ]
+            },
+            "description":""
+         },
+         "least_operating_space_ratio_storage_server":0.1,
+         "max_machine_failures_without_losing_availability":0,
+         "total_disk_used_bytes":0,
+         "total_kv_size_bytes":0,
+         "system_kv_size_bytes":0,
+         "partitions_count":2,
+         "moving_data":{
+            "total_written_bytes":0,
+            "in_flight_bytes":0,
+            "in_queue_bytes":0,
+            "highest_priority":0
+         },
+         "team_trackers":[
+            {
+                "primary":true,
+                "in_flight_bytes":0,
+                "unhealthy_servers":0,
+                "state":{
+                    "healthy":true,
+                    "min_replicas_remaining":0,
+                    "name":{
+                       "$enum":[
+                          "initializing",
+                          "missing_data",
+                          "healing",
+                          "optimizing_team_collections",
+                          "healthy_populating_region",
+                          "healthy_repartitioning",
+                          "healthy_removing_server",
+                          "healthy_rebalancing",
+                          "healthy_perpetual_wiggle",
+                          "healthy"
+                       ]
+                    },
+                    "description":""
+                }
+            }
+         ],
+         "least_operating_space_bytes_storage_server":0,
+         "max_machine_failures_without_losing_data":0
+      }
+   },
+   "client":{
+      "coordinators":{
+         "coordinators":[
+            {
+               "reachable":true,
+               "address":"127.0.0.1:4701",
+               "protocol": "0fdb00b070010001"
+            }
+         ],
+         "quorum_reachable":true
+      },
+      "database_status":{
+         "available":true,
+         "healthy":true
+      },
+      "messages":[
+         {
+            "name":{
+               "$enum":[
+                  "inconsistent_cluster_file",
+                  "unreachable_cluster_controller",
+                  "no_cluster_controller",
+                  "status_incomplete_client",
+                  "status_incomplete_coordinators",
+                  "status_incomplete_error",
+                  "status_incomplete_timeout",
+                  "status_incomplete_cluster",
+                  "quorum_not_reachable"
+               ]
+            },
+            "description":"The cluster file is not up to date."
+         }
+      ],
+      "timestamp":1415650089,
+      "cluster_file":{
+         "path":"/etc/foundationdb/fdb.cluster",
+         "up_to_date":true
+      }
+   }
+})statusSchema"_sr;

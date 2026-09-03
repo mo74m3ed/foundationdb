@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -492,7 +492,7 @@ TEST_CASE("/flow/FlatBuffers/VectorRef") {
 	return Void();
 }
 
-TEST_CASE("/flow/FlatBuffers/Standalone") {
+TEST_CASE("/flow/FlatBuffers/Standalone2") {
 	std::vector<Standalone<StringRef>> vecIn;
 	auto numElements = deterministicRandom()->randomInt(1, 20);
 	for (int i = 0; i < numElements; ++i) {
@@ -530,7 +530,7 @@ TEST_CASE("/flow/FlatBuffers/EmptyStrings") {
 	rd.deserialize(xs);
 	ASSERT(xs.size() == kSize);
 	for (const auto& x : xs) {
-		ASSERT(x.size() == 0);
+		ASSERT(x.empty());
 	}
 	return Void();
 }
@@ -543,7 +543,7 @@ TEST_CASE("/flow/FlatBuffers/EmptyVectors") {
 	rd.deserialize(xs);
 	ASSERT(xs.size() == kSize);
 	for (const auto& x : xs) {
-		ASSERT(x.size() == 0);
+		ASSERT(x.empty());
 	}
 	return Void();
 }
@@ -556,7 +556,7 @@ TEST_CASE("/flow/FlatBuffers/EmptyVectorRefs") {
 	rd.deserialize(xs);
 	ASSERT(xs.size() == kSize);
 	for (const auto& x : xs) {
-		ASSERT(x.size() == 0);
+		ASSERT(x.empty());
 	}
 	return Void();
 }
@@ -570,7 +570,7 @@ TEST_CASE("/flow/FlatBuffers/EmptyPreSerVectorRefs") {
 	rd.deserialize(xs);
 	ASSERT(xs.size() == kSize);
 	for (const auto& x : xs) {
-		ASSERT(x.size() == 0);
+		ASSERT(x.empty());
 	}
 	return Void();
 }
@@ -584,7 +584,7 @@ TEST_CASE("/flow/FlatBuffers/EmptyUnorderedSet") {
 	rd.deserialize(xs);
 	ASSERT(xs.size() == kSize);
 	for (const auto& x : xs) {
-		ASSERT(x.size() == 0);
+		ASSERT(x.empty());
 	}
 	return Void();
 }

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,8 +24,9 @@
 #include "flow/Error.h"
 #include "fdbrpc/IPAllowList.h"
 
-#include <fmt/printf.h>
 #include <fmt/format.h>
+#include <fmt/printf.h>
+#include <fmt/ranges.h>
 #include <bitset>
 
 namespace {
@@ -179,8 +180,8 @@ IPAddress parseAddr(std::string const& str) {
 
 struct SubNetTest {
 	AuthAllowedSubnet subnet;
-	SubNetTest(AuthAllowedSubnet&& subnet) : subnet(std::move(subnet)) {}
-	SubNetTest(AuthAllowedSubnet const& subnet) : subnet(subnet) {}
+	explicit SubNetTest(AuthAllowedSubnet&& subnet) : subnet(subnet) {}
+	explicit SubNetTest(AuthAllowedSubnet const& subnet) : subnet(subnet) {}
 	template <bool V4>
 	static SubNetTest randomSubNetImpl() {
 		constexpr int width = V4 ? 4 : 16;

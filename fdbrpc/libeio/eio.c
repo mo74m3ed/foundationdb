@@ -57,7 +57,6 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <limits.h>
@@ -1255,7 +1254,7 @@ static int eio__realpath(struct tmpbuf* tmpbuf, eio_wd wd, const char* path) {
 
     if (fd >= 0)
       {
-        sprintf (tmp1, "/proc/self/fd/%d", fd);
+        snprintf(tmp1, PATH_MAX, "/proc/self/fd/%d", fd);
         req->result = readlink (tmp1, res, PATH_MAX);
         close (fd);
 
@@ -1800,7 +1799,7 @@ static void eio__scandir(eio_req* req, etp_worker* self) {
 					if (ent->type == EIO_DT_UNKNOWN) {
 						if (*name == '.') /* leading dots are likely directories, and, in any case, rare */
 							ent->score = 1;
-						else if (!strchr(name, '.')) /* absense of dots indicate likely dirs */
+						else if (!strchr(name, '.')) /* absence of dots indicate likely dirs */
 							ent->score = len <= 2   ? 4 - len
 							             : len <= 4 ? 4
 							             : len <= 7 ? 5

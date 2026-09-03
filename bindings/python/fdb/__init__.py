@@ -3,7 +3,7 @@
 #
 # This source file is part of the FoundationDB open source project
 #
-# Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+# Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,6 +24,8 @@
 https://apple.github.io/foundationdb/api-python.html"""
 
 import fdb.apiversion
+
+__version__ = fdb.apiversion.FDB_VERSION
 
 LATEST_API_VERSION = fdb.apiversion.LATEST_API_VERSION
 
@@ -100,7 +102,6 @@ def api_version(ver):
         "predicates",
         "Future",
         "Database",
-        "Tenant",
         "Transaction",
         "KeyValue",
         "KeySelector",
@@ -111,9 +112,6 @@ def api_version(ver):
     )
 
     _add_symbols(fdb.impl, list)
-
-    if ver >= 630:
-        import fdb.tenant_management
 
     if ver < 610:
         globals()["init"] = getattr(fdb.impl, "init")

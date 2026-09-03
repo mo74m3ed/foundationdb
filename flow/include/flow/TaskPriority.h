@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2023 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,8 @@
 
 #ifndef FLOW_TASKPRIORITY_H
 #define FLOW_TASKPRIORITY_H
+
+#include "flow/Error.h"
 
 enum class TaskPriority {
 	Max = 1000000,
@@ -86,8 +88,6 @@ enum class TaskPriority {
 	UpdateStorage = 3000,
 	CompactCache = 2900,
 	TLogSpilledPeekReply = 2800,
-	SSSpilledChangeFeedReply = 2730,
-	BlobWorkerReadChangeFeed = 2720,
 	BlobWorkerUpdateFDB = 2710,
 	BlobWorkerUpdateStorage = 2700,
 	FetchKeys = 2500,
@@ -115,6 +115,11 @@ inline TaskPriority decrementPriority(TaskPriority p) {
 
 inline TaskPriority incrementPriorityIfEven(TaskPriority p) {
 	return static_cast<TaskPriority>(static_cast<uint64_t>(p) | 1);
+}
+
+inline TaskPriority getTaskPriorityFromInt(int p) {
+	ASSERT(p >= static_cast<int>(TaskPriority::Min) && p <= static_cast<int>(TaskPriority::Max));
+	return static_cast<TaskPriority>(p);
 }
 
 #endif // FLOW_TASKPRIORITY_H

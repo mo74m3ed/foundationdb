@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -53,7 +53,6 @@ enum TesterOptionId {
 	OPT_OUTPUT_PIPE,
 	OPT_FDB_API_VERSION,
 	OPT_TRANSACTION_RETRY_LIMIT,
-	OPT_BLOB_GRANULE_LOCAL_FILE_PATH,
 	OPT_STATS_INTERVAL,
 	OPT_TLS_CERT_FILE,
 	OPT_TLS_KEY_FILE,
@@ -81,7 +80,6 @@ CSimpleOpt::SOption TesterOptionDefs[] = //
 	  { OPT_OUTPUT_PIPE, "--output-pipe", SO_REQ_SEP },
 	  { OPT_FDB_API_VERSION, "--api-version", SO_REQ_SEP },
 	  { OPT_TRANSACTION_RETRY_LIMIT, "--transaction-retry-limit", SO_REQ_SEP },
-	  { OPT_BLOB_GRANULE_LOCAL_FILE_PATH, "--blob-granule-local-file-path", SO_REQ_SEP },
 	  { OPT_STATS_INTERVAL, "--stats-interval", SO_REQ_SEP },
 	  { OPT_TLS_CERT_FILE, "--tls-cert-file", SO_REQ_SEP },
 	  { OPT_TLS_KEY_FILE, "--tls-key-file", SO_REQ_SEP },
@@ -97,7 +95,7 @@ void printProgramUsage(const char* execName) {
 	       "                 The path of a file containing the connection string for the\n"
 	       "                 FoundationDB cluster. The default is `fdb.cluster'\n"
 	       "  --log          Enables trace file logging for the CLI session.\n"
-	       "  --log-dir PATH Specifes the output directory for trace files. If\n"
+	       "  --log-dir PATH Specifies the output directory for trace files. If\n"
 	       "                 unspecified, defaults to the current directory. Has\n"
 	       "                 no effect unless --log is specified.\n"
 	       "  --log-group LOG_GROUP\n"
@@ -123,9 +121,7 @@ void printProgramUsage(const char* execName) {
 	       "  --api-version VERSION\n"
 	       "                 Required FDB API version (default %d).\n"
 	       "  --transaction-retry-limit NUMBER\n"
-	       "				 Maximum number of retries per tranaction (default: 0 - unlimited)\n"
-	       "  --blob-granule-local-file-path PATH\n"
-	       "				 Path to blob granule files on local filesystem\n"
+	       "				 Maximum number of retries per transaction (default: 0 - unlimited)\n"
 	       "  -f, --test-file FILE\n"
 	       "                 Test file to run.\n"
 	       "  --stats-interval MILLISECONDS\n"
@@ -155,7 +151,8 @@ void processIntOption(const std::string& optionName, const std::string& value, i
 		throw TesterError(fmt::format("Invalid value {} for {}", value, optionName));
 	}
 	if (res < minValue || res > maxValue) {
-		throw TesterError(fmt::format("Value for {} must be between {} and {}", optionName, minValue, maxValue));
+		throw TesterError(fmt::format(
+		    "Value for {} must be between {} and {}. Input value {}.", optionName, minValue, maxValue, res));
 	}
 }
 
@@ -211,9 +208,6 @@ bool processArg(TesterOptions& options, const CSimpleOpt& args) {
 		break;
 	case OPT_TRANSACTION_RETRY_LIMIT:
 		processIntOption(args.OptionText(), args.OptionArg(), 0, 1000, options.transactionRetryLimit);
-		break;
-	case OPT_BLOB_GRANULE_LOCAL_FILE_PATH:
-		options.bgBasePath = args.OptionArg();
 		break;
 	case OPT_STATS_INTERVAL:
 		processIntOption(args.OptionText(), args.OptionArg(), 0, 60000, options.statsIntervalMs);
@@ -331,7 +325,7 @@ void applyNetworkOptions(TesterOptions& options) {
 		fdb::network::setOption(FDBNetworkOption::FDB_NET_OPTION_RETAIN_CLIENT_LIBRARY_COPIES);
 	}
 
-	for (auto knob : options.testSpec.knobs) {
+	for (const auto& knob : options.testSpec.knobs) {
 		fmt::print(stderr, "Setting knob {}={}\n", knob.first.c_str(), knob.second.c_str());
 		fdb::network::setOption(FDBNetworkOption::FDB_NET_OPTION_KNOB,
 		                        fmt::format("{}={}", knob.first.c_str(), knob.second.c_str()));
@@ -344,12 +338,6 @@ void randomizeOptions(TesterOptions& options) {
 	options.numClientThreads = random.randomInt(options.testSpec.minClientThreads, options.testSpec.maxClientThreads);
 	options.numDatabases = random.randomInt(options.testSpec.minDatabases, options.testSpec.maxDatabases);
 	options.numClients = random.randomInt(options.testSpec.minClients, options.testSpec.maxClients);
-
-	// Choose a random number of tenants. If a test is configured to allow 0 tenants, then use 0 tenants half the time.
-	if (options.testSpec.maxTenants >= options.testSpec.minTenants &&
-	    (options.testSpec.minTenants > 0 || random.randomBool(0.5))) {
-		options.numTenants = random.randomInt(options.testSpec.minTenants, options.testSpec.maxTenants);
-	}
 }
 
 bool runWorkloads(TesterOptions& options) {
@@ -363,7 +351,6 @@ bool runWorkloads(TesterOptions& options) {
 		txExecOptions.transactionRetryLimit = options.transactionRetryLimit;
 		txExecOptions.tmpDir = options.tmpDir.empty() ? std::string("/tmp") : options.tmpDir;
 		txExecOptions.tamperClusterFile = options.testSpec.tamperClusterFile;
-		txExecOptions.numTenants = options.numTenants;
 
 		std::vector<std::shared_ptr<IWorkload>> workloads;
 		workloads.reserve(options.testSpec.workloads.size() * options.numClients);
@@ -375,7 +362,6 @@ bool runWorkloads(TesterOptions& options) {
 				config.options = workloadSpec.options;
 				config.clientId = i;
 				config.numClients = options.numClients;
-				config.numTenants = options.numTenants;
 				config.apiVersion = options.apiVersion;
 				std::shared_ptr<IWorkload> workload = IWorkloadFactory::create(workloadSpec.name, config);
 				if (!workload) {
@@ -446,6 +432,26 @@ int main(int argc, char** argv) {
 		if (!runWorkloads(options)) {
 			retCode = 1;
 		}
+
+#ifdef ADDRESS_SANITIZER
+		// Flush the network thread's onMainThread queue to ensure deferred
+		// cleanup callbacks (from fdb_database_destroy/fdb_transaction_destroy)
+		// have been processed before stopping the network. We create a temporary
+		// database and request its server protocol — this round-trips through
+		// onMainThread, guaranteeing all prior queued callbacks have executed.
+		{
+			fdb::native::FDBDatabase* flushDb = nullptr;
+			auto err = fdb::native::fdb_create_database(options.clusterFile.c_str(), &flushDb);
+			if (!err && flushDb) {
+				auto f = fdb::native::fdb_database_get_server_protocol(flushDb, 0);
+				if (f) {
+					(void)fdb::native::fdb_future_block_until_ready(f);
+					fdb::native::fdb_future_destroy(f);
+				}
+				fdb::native::fdb_database_destroy(flushDb);
+			}
+		}
+#endif
 
 		fprintf(stderr, "Stopping FDB network thread\n");
 		fdb_check(fdb::network::stop(), "Failed to stop FDB thread");

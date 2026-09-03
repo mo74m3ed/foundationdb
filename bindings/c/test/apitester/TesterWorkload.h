@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,12 +46,12 @@ public:
 	virtual void checkProgress() = 0;
 };
 
-// Workoad interface
+// Workload interface
 class IWorkload {
 public:
-	virtual ~IWorkload() {}
+	virtual ~IWorkload() = default;
 
-	// Intialize the workload
+	// Initialize the workload
 	virtual void init(WorkloadManager* manager) = 0;
 
 	// Start executing the workload
@@ -72,8 +72,9 @@ public:
 };
 
 // Workload configuration
+// The comments on this stuff make me weep for humanity.
 struct WorkloadConfig {
-	// Workoad name
+	// Workload name
 	std::string name;
 
 	// Client ID assigned to the workload (a number from 0 to numClients-1)
@@ -83,7 +84,11 @@ struct WorkloadConfig {
 	int numClients;
 
 	// Number of Tenants
-	int numTenants;
+	// TODO(gglass): delete tenant support more aggressively out of files in this
+	// directory. For now leave it in with numTenants set to 0.  Prior deletion
+	// caused damage and the test cases spin or break themselves or *something*
+	// and end up timing out due to ctest 10 minute timeout.
+	int numTenants = 0;
 
 	// Selected FDB API version
 	int apiVersion;
@@ -101,7 +106,7 @@ struct WorkloadConfig {
 // Tracks if workload is active, notifies the workload manager when the workload completes
 class WorkloadBase : public IWorkload {
 public:
-	WorkloadBase(const WorkloadConfig& config);
+	explicit WorkloadBase(const WorkloadConfig& config);
 
 	// Initialize the workload
 	void init(WorkloadManager* manager) override;
@@ -136,7 +141,7 @@ protected:
 	// Log an info message
 	void info(const std::string& msg);
 
-	// Confirm a successfull progress check
+	// Confirm a successful progress check
 	void confirmProgress();
 
 private:
@@ -166,7 +171,7 @@ protected:
 	// Total number of clients
 	int numClients;
 
-	// The maximum number of errors before stoppoing the workload
+	// The maximum number of errors before stopping the workload
 	int maxErrors;
 
 	// The timeout (in ms) automatically set for all transactions to a random value
@@ -187,12 +192,12 @@ protected:
 	// Number of started transactions
 	std::atomic<int> numTxStarted;
 
-	// Workload is in progress (intialized, but not completed)
+	// Workload is in progress (initialized, but not completed)
 	std::atomic<bool> inProgress;
 };
 
 // Workload manager
-// Keeps track of active workoads, stops the scheduler after all workloads complete
+// Keeps track of active workloads, stops the scheduler after all workloads complete
 class WorkloadManager {
 public:
 	WorkloadManager(ITransactionExecutor* txExecutor, IScheduler* scheduler)
@@ -214,7 +219,7 @@ public:
 		return numWorkloadsFailed > 0;
 	}
 
-	// Schedule statistics to be printed in regular timeintervals
+	// Schedule statistics to be printed in regular time intervals
 	void schedulePrintStatistics(int timeIntervalMs);
 
 private:
@@ -222,7 +227,7 @@ private:
 
 	// Info about a running workload
 	struct WorkloadInfo {
-		// Reference to the workoad for ownership
+		// Reference to the workload for ownership
 		std::shared_ptr<IWorkload> ref;
 		// Continuation to be executed after completing the workload
 		TTaskFct cont;
@@ -273,6 +278,9 @@ private:
 
 	// Timer for printing statistics in regular intervals
 	std::unique_ptr<ITimer> statsTimer;
+
+	// Flag to stop the stats timer from re-scheduling
+	std::atomic<bool> statsStopped{ false };
 };
 
 // A workload factory
@@ -296,7 +304,7 @@ struct IWorkloadFactory {
  */
 template <class WorkloadType>
 struct WorkloadFactory : IWorkloadFactory {
-	WorkloadFactory(const char* name) { factories()[name] = this; }
+	explicit WorkloadFactory(const char* name) { factories()[name] = this; }
 	std::shared_ptr<IWorkload> create(const WorkloadConfig& config) override {
 		return std::make_shared<WorkloadType>(config);
 	}

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,16 +37,16 @@ struct TransactionLineage : LineageProperties<TransactionLineage> {
 	UID txID;
 	Operation operation = Operation::Unset;
 
-	bool isSet(uint64_t TransactionLineage::*member) const { return this->*member > 0; }
-	bool isSet(UID TransactionLineage::*member) const {
+	bool isSet(uint64_t TransactionLineage::* member) const { return this->*member > 0; }
+	bool isSet(UID TransactionLineage::* member) const {
 		return static_cast<UID>(this->*member).first() > 0 && static_cast<UID>(this->*member).second() > 0;
 	}
-	bool isSet(Operation TransactionLineage::*member) const { return this->*member != Operation::Unset; }
+	bool isSet(Operation TransactionLineage::* member) const { return this->*member != Operation::Unset; }
 };
 
 struct TransactionLineageCollector : IALPCollector<TransactionLineage> {
 	using Operation = TransactionLineage::Operation;
-	std::optional<std::any> collect(ActorLineage* lineage) {
+	std::optional<std::any> collect(ActorLineage* lineage) override {
 		std::map<std::string_view, std::any> res;
 		auto txID = lineage->get(&TransactionLineage::txID);
 		if (txID.has_value()) {
@@ -93,11 +93,11 @@ struct TransactionLineageCollector : IALPCollector<TransactionLineage> {
 template <class T, class V>
 class ScopedLineage {
 	V before;
-	V T::*member;
+	V T::* member;
 	bool valid = true;
 
 public:
-	ScopedLineage(V T::*member, V const& value) : member(member) {
+	ScopedLineage(V T::* member, V const& value) : member(member) {
 		auto& val = getCurrentLineage()->modify(member);
 		before = val;
 		val = value;
@@ -127,7 +127,7 @@ public:
 };
 
 template <class T, class V>
-ScopedLineage<T, V> make_scoped_lineage(V T::*member, V const& value) {
+ScopedLineage<T, V> make_scoped_lineage(V T::* member, V const& value) {
 	return ScopedLineage<T, V>(member, value);
 }
 #endif

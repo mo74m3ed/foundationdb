@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ class DirectorySubspace;
 
 class IDirectory : public ReferenceCounted<IDirectory> {
 public:
-	typedef std::vector<Standalone<StringRef>> Path;
+	using Path = std::vector<Standalone<StringRef>>;
 
 	virtual Future<Reference<DirectorySubspace>> create(
 	    Reference<Transaction> const& tr,
@@ -62,10 +62,10 @@ public:
 	virtual Future<bool> removeIfExists(Reference<Transaction> const& tr, Path const& path = Path()) = 0;
 
 	virtual Reference<DirectoryLayer> getDirectoryLayer() = 0;
-	virtual const Standalone<StringRef> getLayer() const = 0;
-	virtual const Path getPath() const = 0;
+	virtual Standalone<StringRef> getLayer() const = 0;
+	virtual Path getPath() const = 0;
 
-	virtual ~IDirectory(){};
+	virtual ~IDirectory() = default;
 };
 } // namespace FDB
 

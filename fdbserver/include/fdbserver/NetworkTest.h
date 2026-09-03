@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,17 +28,16 @@
 
 struct NetworkTestInterface {
 	RequestStream<struct NetworkTestRequest> test;
-	RequestStream<struct NetworkTestStreamingRequest> testStream;
-	NetworkTestInterface() {}
-	NetworkTestInterface(NetworkAddress remote);
-	NetworkTestInterface(INetwork* local);
+	NetworkTestInterface() = default;
+	explicit NetworkTestInterface(NetworkAddress remote);
+	explicit NetworkTestInterface(INetwork* local);
 };
 
 struct NetworkTestReply {
 	constexpr static FileIdentifier file_identifier = 14465374;
 	Value value;
-	NetworkTestReply() {}
-	NetworkTestReply(Value value) : value(value) {}
+	NetworkTestReply() = default;
+	explicit NetworkTestReply(Value value) : value(value) {}
 	template <class Ar>
 	void serialize(Ar& ar) {
 		serializer(ar, value);
@@ -50,34 +49,11 @@ struct NetworkTestRequest {
 	Key key;
 	uint32_t replySize;
 	ReplyPromise<struct NetworkTestReply> reply;
-	NetworkTestRequest() {}
+	NetworkTestRequest() = default;
 	NetworkTestRequest(Key key, uint32_t replySize) : key(key), replySize(replySize) {}
 	template <class Ar>
 	void serialize(Ar& ar) {
 		serializer(ar, key, replySize, reply);
-	}
-};
-
-struct NetworkTestStreamingReply : ReplyPromiseStreamReply {
-	constexpr static FileIdentifier file_identifier = 3726830;
-
-	int index = 0;
-	NetworkTestStreamingReply() = default;
-	explicit NetworkTestStreamingReply(int index) : index(index) {}
-	size_t expectedSize() const { return 4e6; /*sizeof(*this);*/ }
-
-	template <class Ar>
-	void serialize(Ar& ar) {
-		serializer(ar, ReplyPromiseStreamReply::acknowledgeToken, ReplyPromiseStreamReply::sequence, index);
-	}
-};
-
-struct NetworkTestStreamingRequest {
-	constexpr static FileIdentifier file_identifier = 2794452;
-	ReplyPromiseStream<struct NetworkTestStreamingReply> reply;
-	template <class Ar>
-	void serialize(Ar& ar) {
-		serializer(ar, reply);
 	}
 };
 

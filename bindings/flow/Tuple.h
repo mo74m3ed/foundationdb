@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,13 +26,13 @@
 #include "bindings/flow/fdb_flow.h"
 #include "fdbclient/TupleVersionstamp.h"
 
-typedef TupleVersionstamp Versionstamp;
+using Versionstamp = TupleVersionstamp;
 
 namespace FDB {
 struct Uuid {
 	const static size_t SIZE;
 
-	Uuid(StringRef const& data);
+	explicit Uuid(StringRef const& data);
 
 	StringRef getData() const;
 
@@ -49,7 +49,7 @@ private:
 };
 
 struct Tuple {
-	Tuple() {}
+	Tuple() = default;
 
 	static Tuple unpack(StringRef const& str);
 
@@ -114,9 +114,11 @@ private:
 	static const uint8_t FALSE_CODE;
 	static const uint8_t TRUE_CODE;
 	static const uint8_t UUID_CODE;
+	// Java Tuple layer VERSIONSTAMP has 96 bits(12 bytes).
+	// It has additional 2 bytes user code than the internal VERSIONTAMP of size 10 bytes
 	static const uint8_t VERSIONSTAMP_96_CODE;
 
-	Tuple(const StringRef& data);
+	explicit Tuple(const StringRef& data);
 	Tuple(Standalone<VectorRef<uint8_t>> data, std::vector<size_t> offsets);
 	Standalone<VectorRef<uint8_t>> data;
 	std::vector<size_t> offsets;

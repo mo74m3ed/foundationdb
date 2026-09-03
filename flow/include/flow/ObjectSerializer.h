@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ template <class Ar>
 struct LoadContext {
 	Ar* ar;
 
-	LoadContext(Ar* ar) : ar(ar) {}
+	explicit LoadContext(Ar* ar) : ar(ar) {}
 
 	Arena& arena() { return ar->arena(); }
 
@@ -231,10 +231,10 @@ public:
 	};
 
 	// takes (object size, allocator context pointer), returns pointer to allocated memory
-	typedef uint8_t* (*AllocatorFuncType)(const size_t, void*);
+	using AllocatorFuncType = uint8_t* (*)(const size_t, void*);
 
 	// takes (wipe begin pointer, wipe length, allocator context pointer)
-	typedef void (*MarkForWipeFuncType)(uint8_t*, size_t, void*);
+	using MarkForWipeFuncType = void (*)(uint8_t*, size_t, void*);
 
 	// Overload that enables serializer traits to mark the buffers for wiping (zeroing out) after use.
 	// MarkForWipeFunc shares allocator context with allocatorFunc
@@ -307,7 +307,7 @@ namespace detail {
 
 template <class T, class Context>
 struct LoadSaveHelper<Standalone<T>, Context> : Context {
-	LoadSaveHelper(const Context& context) : Context(context), helper(context) {}
+	explicit LoadSaveHelper(const Context& context) : Context(context), helper(context) {}
 
 	void load(Standalone<T>& member, const uint8_t* current) {
 		helper.load(member.contents(), current);

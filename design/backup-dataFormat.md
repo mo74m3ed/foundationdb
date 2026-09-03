@@ -54,7 +54,7 @@ NOTE: All blocks except for the final block will have one last  value which will
 
 The code related to how a range file is written is in the `struct RangeFileWriter` in `namespace fileBackup`.
 
-The code that decodes a range block is in `ACTOR Future<Standalone<VectorRef<KeyValueRef>>> decodeRangeFileBlock(Reference<IAsyncFile> file, int64_t offset, int len, Database cx)`.
+The current range-block decoder is `fileBackup::decodeRangeFileBlock()` in [`BackupFileFormat.cpp`](../fdbclient/BackupFileFormat.cpp).
 
 
 ### Data format in a log file
@@ -82,10 +82,10 @@ where type is the mutation type, such as Set or Clear, `kLen` and `vLen` respect
 
 The code related to how a log file is written is in the `struct LogFileWriter` in `namespace fileBackup`.
 
-The code that decodes a mutation block is in `ACTOR Future<Standalone<VectorRef<KeyValueRef>>> decodeLogFileBlock(Reference<IAsyncFile> file, int64_t offset, int len)`.
+The current mutation-block decoder is `fileBackup::decodeMutationLogFileBlock()` in [`BackupFileFormat.cpp`](../fdbclient/BackupFileFormat.cpp).
 
 
 ### Endianness
 When the restore decodes a serialized integer from the backup file, it needs to convert the serialized value from big endian to little endian.
 
-The reason is as follows: When the backup procedure transfers the data to remote blob store, the backup data is encoded in big endian. However, FoundationDB currently only run on little endian machines. The endianness affects the interpretation of an integer, so we must perform the endianness convertion.
+The reason is as follows: When the backup procedure transfers the data to remote blob store, the backup data is encoded in big endian. However, FoundationDB currently only run on little endian machines. The endianness affects the interpretation of an integer, so we must perform the endianness conversion.

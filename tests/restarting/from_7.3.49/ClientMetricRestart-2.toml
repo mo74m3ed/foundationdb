@@ -1,0 +1,15 @@
+[configuration]
+storageEngineExcludeTypes=[5]
+
+[[test]]
+testTitle='ClientMetricRestartTest'
+# Exercise configured client metric sampling during simulation speed-up.
+connectionFailuresDisableDuration=500.0
+clearAfterTest=false
+waitForQuiescenceEnd=false
+runConsistencyCheck=false
+
+    [[test.workload]]
+    testName='ClientMetric'
+    toSet=false
+    testDuration=500.0

@@ -110,8 +110,7 @@
                   "commit_proxy",
                   "grv_proxy",
                   "master",
-                  "test",
-                  "storage_cache"
+                  "test"
                ]
             },
             "degraded":true,
@@ -152,7 +151,6 @@
                         "cluster_controller",
                         "data_distributor",
                         "ratekeeper",
-                        "storage_cache",
                         "router",
                         "coordinator"
                      ]
@@ -172,10 +170,22 @@
                      "memory",
                      "memory-1",
                      "memory-2",
-                     "memory-radixtree-beta",
+                     "memory-radixtree",
                      "unknown"
                      ]}
                   },
+                  "rocksdb_metrics":{
+                     "block_cache_hits":12341234,
+                     "block_cache_misses":12341234,
+                     "pending_compaction_bytes":12341234,
+                     "memtable_bytes":12341234,
+                     "sst_reader_bytes":12341234,
+                     "block_cache_usage":12341234,
+                     "block_cache_limit":12341234,
+                     "throttled_commits":12341234,
+                     "write_stall_microseconds":12341234
+                  },
+                  "rocksdb_version":"9.7.3",
                   "data_version":12341234,
                   "durable_version":12341234,
                   "data_lag": {
@@ -208,6 +218,27 @@
                      "roughness":0.0
                   },
                   "keys_queried":{
+                     "hz":0.0,
+                     "counter":0,
+                     "roughness":0.0
+                  },
+                  "active_watches":0,
+                  "total_watches":{
+                     "hz":0.0,
+                     "counter":0,
+                     "roughness":0.0
+                  },
+                  "triggered_watches":{
+                     "hz":0.0,
+                     "counter":0,
+                     "roughness":0.0
+                  },
+                  "timed_out_watches":{
+                     "hz":0.0,
+                     "counter":0,
+                     "roughness":0.0
+                  },
+                  "errored_watches":{
                      "hz":0.0,
                      "counter":0,
                      "roughness":0.0
@@ -294,6 +325,102 @@
                      "p99":0.0,
                      "p99.9":0.0
                   },
+                  "commit_batch_transactions":{ // Number of transactions in the commit batch
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_batch_bytes":{ // Total size of transactions in the commit batch (bytes)
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_batching_waiting":{ // Time transactions spent waiting in queue before commit batch processing (seconds)
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_preresolution_latency":{ // Latency of the pre-resolution phase (seconds)
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_resolution_latency":{ // Latency of the resolution phase (seconds)
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_postresolution_latency":{ // Latency of the post-resolution phase (seconds)
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_tlog_logging_latency":{ // Latency of the TLog logging phase (seconds)
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
+                  "commit_reply_latency":{ // Latency of the reply phase (seconds)
+                     "count":0,
+                     "min":0.0,
+                     "max":0.0,
+                     "median":0.0,
+                     "mean":0.0,
+                     "p25":0.0,
+                     "p90":0.0,
+                     "p95":0.0,
+                     "p99":0.0,
+                     "p99.9":0.0
+                  },
                   "grv_latency_bands":{ // How many GRV requests belong to the latency (in seconds) band (e.g., How many requests belong to [0.01,0.1] latency band). The key is the upper bound of the band and the lower bound is the next smallest band (or 0, if none). Example: {0.01: 27, 0.1: 18, 1: 1, inf: 98,filtered: 10}, we have 18 requests in [0.01, 0.1) band.
                      "$map_key=upperBoundOfBand": 1
                   },
@@ -333,11 +460,11 @@
                   "type":"x",
                   "name":{ // when not limiting
                      "$enum":[
-                        "file_open_error",
                         "incorrect_cluster_file_contents",
                         "trace_log_file_write_error",
                         "trace_log_could_not_create_file",
                         "trace_log_writer_thread_unresponsive",
+                        "exclude_from_tlog_recruitment_low_disk",
                         "process_error",
                         "io_error",
                         "io_timeout",
@@ -513,6 +640,14 @@
          "seconds":1.0,
          "versions":1000000
       },
+      "logserver_lag":{
+         "seconds":1.0,
+         "versions":1000000
+      },
+      "storageserver_lag":{
+         "seconds":1.0,
+         "versions":1000000
+      },
       "active_tss_count":0,
       "degraded_processes":0,
       "database_available":true,
@@ -521,6 +656,10 @@
          "lock_uid":"00000000000000000000000000000000" // Only present when database is locked
       },
       "generation":2,
+      "gray_failure" : { // Displays subset of gray failure in-memory state. Currently, shows excluded server network address (ip + port) as well as time when the server was last excluded. Based on these exclusions, recovery is triggered.
+         "excluded_servers" : [
+         ]
+      },    
       "latency_probe":{ // all measurements are based on running sample transactions
          "read_seconds":7, // time to perform a single read
          "immediate_priority_transaction_start_seconds":0.0, // time to start a sample transaction at system immediate priority
@@ -593,8 +732,7 @@
                   "primary_dc_missing",
                   "fetch_primary_dc_timeout",
                   "fetch_storage_wiggler_stats_timeout",
-                  "fetch_consistency_scan_status_timeout",
-                  "metacluster_metrics_missing"
+                  "fetch_consistency_scan_status_timeout"
                ]
             },
             "issues":[
@@ -604,7 +742,8 @@
                         "incorrect_cluster_file_contents",
                         "trace_log_file_write_error",
                         "trace_log_could_not_create_file",
-                        "trace_log_writer_thread_unresponsive"
+                        "trace_log_writer_thread_unresponsive",
+                        "exclude_from_tlog_recruitment_low_disk"
                      ]
                   },
                   "description":"Cluster file contents do not match current cluster connection string. Verify cluster file is writable and has not been overwritten externally."
@@ -810,7 +949,7 @@
              "memory",
              "memory-1",
              "memory-2",
-             "memory-radixtree-beta"
+             "memory-radixtree"
          ]},
          "log_spill":1,
          "storage_engine":{
@@ -824,7 +963,7 @@
              "memory",
              "memory-1",
              "memory-2",
-             "memory-radixtree-beta"
+             "memory-radixtree"
          ]},
          "tss_count":1,
          "tss_storage_engine":{
@@ -838,7 +977,7 @@
              "memory",
              "memory-1",
              "memory-2",
-             "memory-radixtree-beta"
+             "memory-radixtree"
          ]},
          "coordinators_count":1,
          "excluded_servers":[
@@ -855,25 +994,30 @@
          "grv_proxies":1, // this field will be absent if a value has not been explicitly set
          "proxies":6, // this field will be absent if a value has not been explicitly set
          "backup_worker_enabled":1,
+         "range_partitioned_backup_worker_enabled":1,
+         "range_partitioned_backup_workers":1,
          "perpetual_storage_wiggle": 0,
          "perpetual_storage_wiggle_locality":"0",
+         "perpetual_storage_wiggle_engine":{
+         "$enum":[
+             "ssd",
+             "ssd-1",
+             "ssd-2",
+             "ssd-redwood-1",
+             "ssd-rocksdb-v1",
+             "ssd-sharded-rocksdb",
+             "memory",
+             "memory-1",
+             "memory-2",
+             "memory-radixtree-beta",
+             "none"
+         ]},
          "storage_migration_type":{
          "$enum":[
              "disabled",
              "gradual",
              "aggressive"
          ]},
-         "tenant_mode": {
-             "$enum":[
-             "disabled",
-             "optional_experimental",
-             "required_experimental"
-         ]},
-         "encryption_at_rest_mode": {
-             "$enum":[
-             "disabled",
-             "aes_256_ctr"
-         ]}
       },
       "data":{
          "least_operating_space_bytes_log_server":0,
@@ -966,19 +1110,6 @@
                "logical_core_utilization":0.4 // computed as cpu_seconds / elapsed_seconds; value may be capped at 0.5 due to hyper-threading
             }
          }
-      },
-      "metacluster" : {
-         "cluster_type" : "management",         // management, data, or standalone
-         "metacluster_name" : "metacluster1",
-         "metacluster_id" : 12345,
-         "data_cluster_name" : "data_cluster1", // data cluster only
-         "data_cluster_id" : 12346,             // data cluster only
-         "num_data_clusters": 10                // management cluster only
-      },
-      "tenants" : {
-         "num_tenants" : 1, // on data cluster, local count; on management cluster, total metacluster count
-         "num_tenant_groups" : 10,
-         "tenant_group_capacity" : 20,
       },
       "idempotency_ids" : {
          "size_bytes" : 0, // An estimate of the current number of bytes used in the database to store idempotency ids.

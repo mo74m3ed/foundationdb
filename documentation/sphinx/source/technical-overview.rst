@@ -18,11 +18,13 @@ These documents explain the engineering design of FoundationDB, with detailed in
 
 * :doc:`anti-features`: What a system *isn't* is sometimes as important as what it is. FoundationDB explicitly excludes some features either because they are at odds with the overall system design, or because they are better implemented as :doc:`layers <layer-concept>`.
 
+* :doc:`experimental-features` describes experimental features of FoundationDB, available for testing.
+
 * :doc:`engineering` summarizes the unique tools and capabilities behind FoundationDB.
 
 * :doc:`fault-tolerance`: FoundationDB provides fault tolerance by intelligently replicating data across a distributed cluster of machines. Our architecture is designed to minimize service interruption and data loss in the event of machine failures.
 
-* :doc:`flow`: FoundationDB faces rigorous engineering challenges for high performance and scalability. To meet these challenges, we implemented Flow, an extension to C++ that supports actor-based concurrency with new keywords and control-flow primitives while retaining speed and I/O efficiency.
+* :doc:`flow`: FoundationDB faces rigorous engineering challenges for high performance and scalability. To meet these challenges, we implemented Flow, an asynchronous runtime that combines standard C++ coroutines with futures, message streams, and cooperative scheduling while retaining speed and I/O efficiency.
 
 * :doc:`testing`: FoundationDB uses a combined regime of robust simulation, live performance testing, and hardware-based failure testing to meet exacting standards of correctness and performance.
 
@@ -31,6 +33,16 @@ These documents explain the engineering design of FoundationDB, with detailed in
 * :doc:`read-write-path` describes how FDB read and write path works.
 
 * :doc:`ha-write-path` describes how FDB write path works in HA setting.
+
+* :doc:`consistency-check-urgent` describes how to complete a consistency scan of the entire database in a fast way.
+
+* :doc:`rangelock` describes how to do range locks block write traffic to key ranges.
+
+* :doc:`bulkdump` describes how to do snapshot data dump to blobstore or local file system.
+
+* :doc:`bulkload` describes the technical implementation of bulk data loading from external sources.
+
+* :doc:`auditstorage` describes how to do data replica consistency check and location metadata consistency check efficiently.
 
 .. toctree::
    :maxdepth: 1
@@ -44,6 +56,7 @@ These documents explain the engineering design of FoundationDB, with detailed in
    features
    layer-concept
    anti-features
+   experimental-features
    transaction-processing
    fault-tolerance
    flow
@@ -51,3 +64,8 @@ These documents explain the engineering design of FoundationDB, with detailed in
    kv-architecture
    read-write-path
    ha-write-path
+   consistency-check-urgent
+   rangelock
+   bulkdump
+   bulkload
+   auditstorage

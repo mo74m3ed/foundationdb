@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -74,7 +74,7 @@ void ResumableStateForPopulate::runOneTick() {
 					stats.incrOpCount(OP_COMMIT);
 					stats.incrOpCount(OP_TRANSACTION);
 					tx.reset();
-					setTransactionTimeoutIfEnabled(args, tx);
+					setTransactionOptionsIfEnabled(args, tx);
 					watch_tx.startFromStop();
 					key_checkpoint = i + 1;
 					if (i != key_end) {
@@ -148,11 +148,6 @@ repeat_immediate_steps:
 						postNextTick();
 					}
 				}
-			} else {
-				// blob granules op error
-				updateErrorStats(f.error(), iter.op);
-				FutureRC rc = handleForOnError(tx, f, "BG_ON_ERROR", args.isAnyTimeoutEnabled());
-				onIterationEnd(rc);
 			}
 		});
 	}
@@ -170,7 +165,7 @@ void ResumableStateForRunWorkload::updateStepStats() {
 			stats.addLatency(OP_COMMIT, step_latency);
 		}
 		tx.reset();
-		setTransactionTimeoutIfEnabled(args, tx);
+		setTransactionOptionsIfEnabled(args, tx);
 		stats.incrOpCount(OP_COMMIT);
 		needs_commit = false;
 	}
@@ -216,7 +211,7 @@ void ResumableStateForRunWorkload::onTransactionSuccess() {
 				stats.incrOpCount(OP_COMMIT);
 				stats.incrOpCount(OP_TRANSACTION);
 				tx.reset();
-				setTransactionTimeoutIfEnabled(args, tx);
+				setTransactionOptionsIfEnabled(args, tx);
 				watch_tx.startFromStop();
 				onIterationEnd(FutureRC::OK);
 			}
@@ -231,7 +226,7 @@ void ResumableStateForRunWorkload::onTransactionSuccess() {
 		stats.incrOpCount(OP_TRANSACTION);
 		watch_tx.startFromStop();
 		tx.reset();
-		setTransactionTimeoutIfEnabled(args, tx);
+		setTransactionOptionsIfEnabled(args, tx);
 		onIterationEnd(FutureRC::OK);
 	}
 }
@@ -243,6 +238,9 @@ void ResumableStateForRunWorkload::onIterationEnd(FutureRC rc) {
 	if (ended()) {
 		signalEnd();
 	} else {
+		if (rc == FutureRC::RETRY) {
+			setTransactionOptionsIfEnabled(args, tx);
+		}
 		iter = getOpBegin(args);
 		needs_commit = false;
 		postNextTick();

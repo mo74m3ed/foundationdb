@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,6 +28,7 @@
 
 #include <boost/unordered_set.hpp>
 
+#include "flow/BooleanParam.h"
 #include "flow/flow.h"
 #include "flow/Histogram.h"
 #include "flow/ChaosMetrics.h"
@@ -36,25 +37,54 @@
 #include "fdbrpc/FailureMonitor.h"
 #include "fdbrpc/Locality.h"
 #include "flow/IAsyncFile.h"
-#include "flow/TDMetric.actor.h"
+#include "flow/TDMetric.h"
 #include "fdbrpc/HTTP.h"
-#include "fdbrpc/FailureMonitor.h"
-#include "fdbrpc/Locality.h"
 #include "fdbrpc/ReplicationPolicy.h"
-#include "fdbrpc/TokenSign.h"
 #include "fdbrpc/SimulatorKillType.h"
+#include "fdbrpc/SimulatorProcessMetadata.h"
 
 enum ClogMode { ClogDefault, ClogAll, ClogSend, ClogReceive };
-
-struct ValidationData {
-	// global validation that missing refreshed feeds were previously destroyed
-	std::unordered_set<std::string> allDestroyedChangeFeedIDs;
-};
 
 namespace simulator {
 struct ProcessInfo;
 struct MachineInfo;
 } // namespace simulator
+
+constexpr double DISABLE_CONNECTION_FAILURE_FOREVER = 1e6;
+
+// Minimum interval to disable connection failures. If less than this, connection failures are always disabled.
+constexpr double DISABLE_CONNECTION_FAILURE_MIN_INTERVAL = 1e-3;
+
+class ISimulationPolicy : public ReferenceCounted<ISimulationPolicy> {
+public:
+	using KillType = simulator::KillType;
+	using ProcessInfo = simulator::ProcessInfo;
+
+	virtual bool shouldProtectNewProcess(ProcessInfo const&) const { return false; }
+	virtual bool shouldIncludeInAvailabilityCheck(ProcessInfo const&) const { return true; }
+	virtual bool isAvailable(std::vector<ProcessInfo*> const&,
+	                         std::vector<ProcessInfo*> const& availableProcesses,
+	                         std::vector<ProcessInfo*> const& deadProcesses) const {
+		return canKillProcesses(availableProcesses, deadProcesses, KillType::KillInstantly, nullptr);
+	}
+	virtual bool datacenterDead(Optional<Standalone<StringRef>>, std::vector<ProcessInfo*> const&) const {
+		return false;
+	}
+	virtual bool shouldRunVersionValidation() const { return true; }
+	virtual bool canSwapToMachine(Optional<Standalone<StringRef>> const&) const { return true; }
+	virtual bool checkInjectedCorruption(NetworkAddress const&) const { return false; }
+	virtual bool canKillProcesses(std::vector<ProcessInfo*> const& availableProcesses,
+	                              std::vector<ProcessInfo*> const& deadProcesses,
+	                              KillType kt,
+	                              KillType* newKillType) const {
+		if (newKillType) {
+			*newKillType = kt;
+		}
+		return true;
+	}
+
+	virtual ~ISimulationPolicy() = default;
+};
 
 class ISimulator : public INetwork {
 
@@ -63,33 +93,14 @@ public:
 	using ProcessInfo = simulator::ProcessInfo;
 	using MachineInfo = simulator::MachineInfo;
 
-	// Order matters! all modes >= 2 are fault injection modes
-	enum TSSMode { Disabled, EnabledNormal, EnabledAddDelay, EnabledDropMutations };
-
-	enum class BackupAgentType { NoBackupAgents, WaitForType, BackupToFile, BackupToDB };
-	enum class ExtraDatabaseMode { Disabled, LocalOrSingle, Single, Local, Multiple };
-
-	static ExtraDatabaseMode stringToExtraDatabaseMode(std::string databaseMode) {
-		if (databaseMode == "Disabled") {
-			return ExtraDatabaseMode::Disabled;
-		} else if (databaseMode == "LocalOrSingle") {
-			return ExtraDatabaseMode::LocalOrSingle;
-		} else if (databaseMode == "Single") {
-			return ExtraDatabaseMode::Single;
-		} else if (databaseMode == "Local") {
-			return ExtraDatabaseMode::Local;
-		} else if (databaseMode == "Multiple") {
-			return ExtraDatabaseMode::Multiple;
-		} else {
-			TraceEvent(SevError, "UnknownExtraDatabaseMode").detail("DatabaseMode", databaseMode);
-			ASSERT(false);
-			throw internal_error();
-		}
-	};
-
 	ProcessInfo* getProcess(Endpoint const& endpoint) { return getProcessByAddress(endpoint.getPrimaryAddress()); }
+
+	// Returns currently executing process in simulation.
+	// Can return nullptr when currentProcess is cleared in destroyProcess(); returning nullptr prevents trace
+	// events during destruction from accessing a dangling pointer. Can also be null before any process created.
 	ProcessInfo* getCurrentProcess() { return currentProcess; }
 	ProcessInfo const* getCurrentProcess() const { return currentProcess; }
+
 	// onProcess: wait for the process to be scheduled by the runloop; a task will be created for the process.
 	virtual Future<Void> onProcess(ISimulator::ProcessInfo* process, TaskPriority taskID = TaskPriority::Zero) = 0;
 	virtual Future<Void> onMachine(ISimulator::ProcessInfo* process, TaskPriority taskID = TaskPriority::Zero) = 0;
@@ -100,7 +111,7 @@ public:
 	                                bool sslEnabled,
 	                                uint16_t listenPerProcess,
 	                                LocalityData locality,
-	                                ProcessClass startingClass,
+	                                Reference<simulator::ProcessInfoMetadata> metadata,
 	                                const char* dataFolder,
 	                                const char* coordinationFolder,
 	                                ProtocolVersion protocol,
@@ -126,9 +137,6 @@ public:
 	                          bool forceKill = false,
 	                          KillType* ktFinal = nullptr) = 0;
 	virtual bool killAll(KillType kt, bool forceKill = false, KillType* ktFinal = nullptr) = 0;
-	// virtual KillType getMachineKillState( UID zoneID ) = 0;
-	virtual void processInjectBlobFault(ProcessInfo* machine, double failureRate) = 0;
-	virtual void processStopInjectBlobFault(ProcessInfo* machine) = 0;
 	virtual bool canKillProcesses(std::vector<ProcessInfo*> const& availableProcesses,
 	                              std::vector<ProcessInfo*> const& deadProcesses,
 	                              KillType kt,
@@ -162,7 +170,7 @@ public:
 					    .detail("Result", "Decremented Role");
 				} else {
 					addressIt->second.erase(rolesIt);
-					if (addressIt->second.size()) {
+					if (!addressIt->second.empty()) {
 						TraceEvent("RoleRemove")
 						    .detail("Address", address)
 						    .detail("Role", role)
@@ -269,7 +277,8 @@ public:
 		allSwapsDisabled = false;
 	}
 	bool canSwapToMachine(Optional<Standalone<StringRef>> zoneId) const {
-		return swapsDisabled.count(zoneId) == 0 && !allSwapsDisabled && extraDatabases.empty();
+		return !swapsDisabled.contains(zoneId) && !allSwapsDisabled &&
+		       (!simulationPolicy || simulationPolicy->canSwapToMachine(zoneId));
 	}
 	void enableSwapsToAll() {
 		swapsDisabled.clear();
@@ -283,6 +292,8 @@ public:
 	virtual void clogInterface(const IPAddress& ip, double seconds, ClogMode mode = ClogDefault) = 0;
 	virtual void clogPair(const IPAddress& from, const IPAddress& to, double seconds) = 0;
 	virtual void unclogPair(const IPAddress& from, const IPAddress& to) = 0;
+	virtual void disconnectPair(const IPAddress& from, const IPAddress& to, double seconds) = 0;
+	virtual void reconnectPair(const IPAddress& from, const IPAddress& to) = 0;
 	virtual std::vector<ProcessInfo*> getAllProcesses() const = 0;
 	virtual ProcessInfo* getProcessByAddress(NetworkAddress const& address) = 0;
 	virtual MachineInfo* getMachineByNetworkAddress(NetworkAddress const& address) = 0;
@@ -297,66 +308,24 @@ public:
 	                                           std::string service,
 	                                           Reference<HTTP::IRequestHandler> requestHandler) = 0;
 
-	int desiredCoordinators;
-	int physicalDatacenters;
+	void setSimulationPolicy(Reference<ISimulationPolicy> policy) { simulationPolicy = policy; }
+	Reference<ISimulationPolicy> getSimulationPolicy() const { return simulationPolicy; }
+
+	void protectAddress(NetworkAddress const& address) { protectedAddresses.insert(address); }
+	bool isProtectedAddress(NetworkAddress const& address) const { return protectedAddresses.contains(address); }
+	size_t protectedAddressCount() const { return protectedAddresses.size(); }
+
 	int processesPerMachine;
 	int listenersPerProcess;
 
-	// We won't kill machines in this set, but we might reboot
-	// them.  This is a conservative mechanism to prevent the
-	// simulator from killing off important processes and rendering
-	// the cluster unrecoverable, e.g. a quorum of coordinators.
-	std::set<NetworkAddress> protectedAddresses;
-
 	std::map<NetworkAddress, ProcessInfo*> currentlyRebootingProcesses;
-	std::vector<std::string> extraDatabases;
-	Reference<IReplicationPolicy> storagePolicy;
-	Reference<IReplicationPolicy> tLogPolicy;
-	int32_t tLogWriteAntiQuorum;
-	Optional<Standalone<StringRef>> primaryDcId;
-	Reference<IReplicationPolicy> remoteTLogPolicy;
-	int32_t usableRegions;
-	bool quiesced = false;
-	std::string disablePrimary;
-	std::string disableRemote;
-	std::string originalRegions;
-	std::string startingDisabledConfiguration;
-	bool allowLogSetKills;
-	Optional<Standalone<StringRef>> remoteDcId;
-	bool hasSatelliteReplication;
-	Reference<IReplicationPolicy> satelliteTLogPolicy;
-	Reference<IReplicationPolicy> satelliteTLogPolicyFallback;
-	int32_t satelliteTLogWriteAntiQuorum;
-	int32_t satelliteTLogWriteAntiQuorumFallback;
-	std::vector<Optional<Standalone<StringRef>>> primarySatelliteDcIds;
-	std::vector<Optional<Standalone<StringRef>>> remoteSatelliteDcIds;
-	TSSMode tssMode;
-	std::map<NetworkAddress, bool> corruptWorkerMap;
-	ConfigDBType configDBType;
-	bool blobGranulesEnabled;
-
-	// Used by workloads that perform reconfigurations
-	int testerCount;
-	std::string connectionString;
 
 	bool isStopped;
 	double lastConnectionFailure;
 	double connectionFailuresDisableDuration;
 	bool speedUpSimulation;
-	BackupAgentType backupAgents;
-	BackupAgentType drAgents;
-	bool willRestart = false;
-	bool restarted = false;
-	ValidationData validationData;
-
-	bool hasDiffProtocolProcess; // true if simulator is testing a process with a different version
-	bool setDiffProtocol; // true if a process with a different protocol version has been started
-
-	bool allowStorageMigrationTypeChange = false;
-	double injectTargetedSSRestartTime = std::numeric_limits<double>::max();
-	double injectSSDelayTime = std::numeric_limits<double>::max();
-	double injectTargetedBMRestartTime = std::numeric_limits<double>::max();
-	double injectTargetedBWRestartTime = std::numeric_limits<double>::max();
+	double connectionFailureEnableTime; // Last time connection failure is enabled.
+	double connectionFailureDisableTime = 0; // Latest time connection failure should be disabled.
 
 	bool allowRebootAndDelete = true;
 
@@ -400,10 +369,11 @@ public:
 
 	std::set<std::pair<std::string, unsigned>> corruptedBlocks;
 
-	// Valdiate at-rest encryption guarantees. If enabled, tests should inject a known 'marker' in Key and/or Values
-	// inserted into FDB by the workload. On shutdown, all test generated files (under simfdb/) are scanned to find if
-	// 'plaintext marker' is present.
-	Optional<std::string> dataAtRestPlaintextMarker;
+	std::unordered_map<std::string, Reference<HTTP::SimRegisteredHandlerContext>> httpHandlers;
+	std::vector<std::pair<ProcessInfo*, Reference<HTTP::SimServerContext>>> httpServerProcesses;
+	std::set<IPAddress> httpServerIps;
+	int nextHTTPPort = 5000;
+	bool httpProtected = false;
 
 	std::unordered_map<std::string, Reference<HTTP::SimRegisteredHandlerContext>> httpHandlers;
 	std::vector<std::pair<ProcessInfo*, Reference<HTTP::SimServerContext>>> httpServerProcesses;
@@ -417,10 +387,10 @@ public:
 
 	double checkDisabled(const std::string& desc) const;
 
-	// generate authz token for use in simulation environment
-	WipedString makeToken(int64_t tenantId, uint64_t ttlSecondsFromNow);
-
+	// FIXME: simulation is generally discussed as being deterministic and single-threaded. So
+	// explain why we need thread_local variables here and a mutex just below.
 	static thread_local ProcessInfo* currentProcess;
+	static thread_local bool isMainThread;
 
 	bool checkInjectedCorruption();
 
@@ -431,6 +401,10 @@ protected:
 	Mutex mutex;
 
 private:
+	Reference<ISimulationPolicy> simulationPolicy;
+	// We won't kill machines in this set, but we might reboot them. This lets
+	// higher-level simulation policies protect important processes.
+	std::set<NetworkAddress> protectedAddresses;
 	std::set<Optional<Standalone<StringRef>>> swapsDisabled;
 	std::map<NetworkAddress, int> excludedAddresses;
 	std::map<NetworkAddress, int> clearedAddresses;
@@ -444,6 +418,7 @@ private:
 extern ISimulator* g_simulator;
 
 void startNewSimulator(bool printSimTime);
+Future<Void> startUnitTestSimulator();
 
 // Parameters used to simulate disk performance
 struct DiskParameters : ReferenceCounted<DiskParameters> {
@@ -456,6 +431,25 @@ struct DiskParameters : ReferenceCounted<DiskParameters> {
 
 // Simulates delays for performing operations on disk
 extern Future<Void> waitUntilDiskReady(Reference<DiskParameters> parameters, int64_t size, bool sync = false);
+
+// Enables connection failures, i.e., clogging, in simulation
+void enableConnectionFailures(std::string const& context, double duration);
+
+// Return the maximum number of satellite logs that can be used based on the number of machines in simulation.
+int getMaxSatelliteLogs();
+
+FDB_BOOLEAN_PARAM(ForceDisable);
+// Disables connection failures, i.e., clogging, in simulation.
+// Returns the remaining seconds for the connection failures to be disabled
+// if the disabling time has been extended. The caller should retry after
+// the specified time has elapsed. If flag is true, don't extend the time
+// and disable the connection failures immediately.
+double disableConnectionFailures(std::string const& context,
+                                 ForceDisable flag = ForceDisable::True,
+                                 double duration = DISABLE_CONNECTION_FAILURE_FOREVER);
+
+// Extend connection failures in simulation
+void extendConnectionFailures(std::string const& context, double duration);
 
 class Sim2FileSystem : public IAsyncFileSystem {
 public:
@@ -474,9 +468,9 @@ public:
 
 	Future<Void> renameFile(std::string const& from, std::string const& to) override;
 
-	Sim2FileSystem() {}
+	Sim2FileSystem() = default;
 
-	~Sim2FileSystem() override {}
+	~Sim2FileSystem() override = default;
 
 	static void newFileSystem();
 

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2023 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,12 +26,17 @@
 
 #include <boost/asio/ip/tcp.hpp>
 
+#include "flow/Knobs.h"
 #include "flow/NetworkAddress.h"
+#include "flow/network.h"
 
 class Void;
 
 template <typename T>
 class Future;
+
+// forward declare SendBuffer, defined in serialize.h
+class SendBuffer;
 
 class IConnection {
 public:
@@ -50,8 +55,8 @@ public:
 	// returns when write() can write at least one byte (or may throw an error if the connection dies)
 	virtual Future<Void> onWritable() = 0;
 
-	// Precondition: read() has been called and last returned 0
 	// returns when read() can read at least one byte (or may throw an error if the connection dies)
+	// Typically called after read() has returned 0, but may also be called on a newly accepted connection.
 	virtual Future<Void> onReadable() = 0;
 
 	// Reads as many bytes as possible from the read buffer into [begin,end) and returns the number of bytes read (might
@@ -86,9 +91,6 @@ public:
 	virtual boost::asio::ip::tcp::socket& getSocket() = 0;
 };
 
-// forward declare SendBuffer, declared in serialize.h
-class SendBuffer;
-
 class IListener {
 public:
 	virtual void addref() = 0;
@@ -104,21 +106,28 @@ public:
 class DNSCache {
 public:
 	DNSCache() = default;
-	explicit DNSCache(const std::map<std::string, std::vector<NetworkAddress>>& dnsCache)
-	  : hostnameToAddresses(dnsCache) {}
+	explicit DNSCache(const std::map<std::string, std::vector<NetworkAddress>>& dnsCache);
 
 	Optional<std::vector<NetworkAddress>> find(const std::string& host, const std::string& service);
 	void add(const std::string& host, const std::string& service, const std::vector<NetworkAddress>& addresses);
+	// Replace a cached entry's addresses without bumping its last-access time.
+	void update(const std::string& host, const std::string& service, const std::vector<NetworkAddress>& addresses);
 	void remove(const std::string& host, const std::string& service);
 	void clear();
+	std::vector<std::string> getKeys() const;
+	Optional<double> getLastAccess(const std::string& host, const std::string& service) const;
 
-	// Convert hostnameToAddresses to string. The format is:
+	// Convert the cache to a string. The format is:
 	// hostname1,host1Address1,host1Address2;hostname2,host2Address1,host2Address2...
 	std::string toString();
 	static DNSCache parseFromString(const std::string& s);
 
 private:
-	std::map<std::string, std::vector<NetworkAddress>> hostnameToAddresses;
+	struct Entry {
+		std::vector<NetworkAddress> addresses;
+		double lastAccess = 0.0;
+	};
+	std::map<std::string, Entry> entries;
 };
 
 class IUDPSocket;
@@ -135,6 +144,13 @@ public:
 	                                               boost::asio::ip::tcp::socket* existingSocket = nullptr) = 0;
 
 	virtual Future<Reference<IConnection>> connectExternal(NetworkAddress toAddr) = 0;
+
+	// Make an outgoing connection to the given address with hostname for SNI (TLS Server Name Indication)
+	virtual Future<Reference<IConnection>> connectExternalWithHostname(NetworkAddress toAddr,
+	                                                                   const std::string& hostname) {
+		// Default implementation ignores hostname - subclasses can override for SNI support
+		return connectExternal(toAddr);
+	}
 
 	// Make an outgoing udp connection and connect to the passed address.
 	virtual Future<Reference<IUDPSocket>> createUDPSocket(NetworkAddress toAddr) = 0;
@@ -179,14 +195,21 @@ public:
 	// If a DNS name can be resolved to both and IPv4 and IPv6 addresses, we want IPv6 addresses when running the
 	// clusters on IPv6.
 	// This function takes a vector of addresses and return a random one, preferring IPv6 over IPv4.
+	// To prefer IPv4 addresses instead, set knob RESOLVE_PREFER_IPV4_ADDR to true.
 	static NetworkAddress pickOneAddress(const std::vector<NetworkAddress>& addresses) {
 		std::vector<NetworkAddress> ipV6Addresses;
+		std::vector<NetworkAddress> ipV4Addresses;
 		for (const NetworkAddress& addr : addresses) {
 			if (addr.isV6()) {
 				ipV6Addresses.push_back(addr);
+			} else {
+				ipV4Addresses.push_back(addr);
 			}
 		}
-		if (ipV6Addresses.size() > 0) {
+		if (!ipV4Addresses.empty() && FLOW_KNOBS->RESOLVE_PREFER_IPV4_ADDR) {
+			return ipV4Addresses[deterministicRandom()->randomInt(0, ipV4Addresses.size())];
+		}
+		if (!ipV6Addresses.empty()) {
 			return ipV6Addresses[deterministicRandom()->randomInt(0, ipV6Addresses.size())];
 		}
 		return addresses[deterministicRandom()->randomInt(0, addresses.size())];

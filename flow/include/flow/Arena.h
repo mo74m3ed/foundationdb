@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,13 +23,15 @@
 #pragma once
 
 #include "flow/BooleanParam.h"
+#include "flow/Error.h"
 #include "flow/FastAlloc.h"
 #include "flow/FastRef.h"
-#include "flow/Error.h"
-#include "flow/Trace.h"
+#include "flow/IRandom.h"
 #include "flow/ObjectSerializerTraits.h"
 #include "flow/FileIdentifier.h"
+#include "flow/swift_support.h"
 #include "flow/Optional.h"
+#include "flow/SimpleCounter.h"
 #include "flow/Traceable.h"
 #include <algorithm>
 #include <array>
@@ -42,9 +44,9 @@
 #include <limits>
 #include <optional>
 #include <set>
+#include <unordered_set>
 #include <type_traits>
 #include <sstream>
-#include <string_view>
 #include <fmt/format.h>
 
 // TrackIt is a zero-size class for tracking constructions, destructions, and assignments of instances
@@ -58,12 +60,12 @@
 // of a class without producing an "inaccessible due to ambiguity" error.
 template <class T>
 struct TrackIt {
-	typedef TrackIt<T> TrackItType;
+	using TrackItType = TrackIt<T>;
 // Put TRACKIT_ASSIGN into any operator= functions for which you want assignments tracked
 #define TRACKIT_ASSIGN(o) *(TrackItType*)this = *(TrackItType*)&(o)
 
 	// The type name T is in the TrackIt output so that objects that inherit TrackIt multiple times
-	// can be tracked propertly, otherwise the create and delete addresses appear duplicative.
+	// can be tracked properly, otherwise the create and delete addresses appear duplicative.
 	// This function returns just the string "T]" parsed from the __PRETTY_FUNCTION__ macro.  There
 	// doesn't seem to be a better portable way to do this.
 	static const char* __trackit__type() {
@@ -194,7 +196,7 @@ struct ArenaBlock : NonCopyable, ThreadSafeReferenceCounted<ArenaBlock> {
 	int unused() const;
 	const void* getData() const;
 	const void* getNextData() const;
-	size_t totalSize() const;
+	size_t totalSize(std::unordered_set<ArenaBlock*>&) const;
 	size_t estimatedTotalSize() const;
 	void wipeUsed();
 	// just for debugging:
@@ -292,8 +294,6 @@ struct union_like_traits<Optional<T>> : std::true_type {
 	}
 };
 
-// #define STANDALONE_ALWAYS_COPY
-
 template <class T>
 class Standalone : private Arena, public T {
 public:
@@ -308,8 +308,8 @@ public:
 	T& contents() { return *(T*)this; }
 	T const& contents() const { return *(T const*)this; }
 
-	Standalone() {}
-	Standalone(const T& t) : Arena(t.expectedSize()), T(arena(), t) {}
+	Standalone() = default;
+	explicit(false) Standalone(const T& t) : Arena(t.expectedSize()), T(arena(), t) {}
 	Standalone<T>& operator=(const T& t) {
 		Arena old = std::move(arena()); // We want to defer the destruction of the arena until after we have copied t,
 		                                // in case it cross-references our previous value
@@ -318,30 +318,12 @@ public:
 		return *this;
 	}
 
-// Always-copy mode was meant to make alloc instrumentation more useful by making allocations occur at the final resting
-// place of objects leaked It doesn't actually work because some uses of Standalone things assume the object's memory
-// will not change on copy or assignment
-#ifdef STANDALONE_ALWAYS_COPY
-	// Treat Standalone<T>'s as T's in construction and assignment so the memory is copied
-	Standalone(const T& t, const Arena& arena) : Standalone(t) {}
-	Standalone(const Standalone<T>& t) : Standalone((T const&)t) {}
-	Standalone(const Standalone<T>&& t) : Standalone((T const&)t) {}
-	Standalone<T>& operator=(const Standalone<T>&& t) {
-		*this = (T const&)t;
-		return *this;
-	}
-	Standalone<T>& operator=(const Standalone<T>& t) {
-		*this = (T const&)t;
-		return *this;
-	}
-#else
 	Standalone(const T& t, const Arena& arena) : Arena(arena), T(t) {}
 	Standalone(const Standalone<T>&) = default;
 	Standalone<T>& operator=(const Standalone<T>&) = default;
 	Standalone(Standalone<T>&&) = default;
 	Standalone<T>& operator=(Standalone<T>&&) = default;
 	~Standalone() = default;
-#endif
 
 	template <class U>
 	Standalone<U> castTo() const {
@@ -357,14 +339,9 @@ public:
 		serializer(ar, (*(T*)this), arena());
 	}
 
-	/*static Standalone<T> fakeStandalone( const T& t ) {
-	    Standalone<T> x;
-	    *(T*)&x = t;
-	    return x;
-	}*/
 private:
 	template <class U>
-	Standalone(Standalone<U> const&); // unimplemented
+	explicit(false) Standalone(Standalone<U> const&); // unimplemented
 	template <class U>
 	Standalone<T> const& operator=(Standalone<U> const&); // unimplemented
 };
@@ -373,27 +350,58 @@ extern std::string format(const char* form, ...);
 
 #pragma pack(push, 4)
 class StringRef {
+private:
+	static SimpleCounter<int64_t>* bytesCopied() {
+		static SimpleCounter<int64_t>* bytesCopied =
+		    SimpleCounter<int64_t>::makeCounter("/flow/arena/stringRefBytesCopied");
+		return bytesCopied;
+	}
+
+	// Delegated-to by StringRef(const char*) so strlen runs once and overflow is checked before truncation.
+	StringRef(const char* str, size_t len)
+	  : data(reinterpret_cast<const uint8_t*>(str)), length(static_cast<int>(len)) {
+		UNSTOPPABLE_ASSERT(len <= std::numeric_limits<int>::max());
+	}
+
 public:
 	constexpr static FileIdentifier file_identifier = 13300811;
 	StringRef() : data(0), length(0) {}
 	StringRef(Arena& p, const StringRef& toCopy) : data(new(p) uint8_t[toCopy.size()]), length(toCopy.size()) {
 		if (length > 0) {
+			bytesCopied()->increment(length);
 			memcpy((void*)data, toCopy.data, length);
 		}
 	}
 	StringRef(Arena& p, const std::string& toCopy) : length((int)toCopy.size()) {
 		UNSTOPPABLE_ASSERT(toCopy.size() <= std::numeric_limits<int>::max());
 		data = new (p) uint8_t[toCopy.size()];
-		if (length)
+		if (length) {
+			bytesCopied()->increment(length);
 			memcpy((void*)data, &toCopy[0], length);
+		}
 	}
 	StringRef(Arena& p, const uint8_t* toCopy, int length) : data(new(p) uint8_t[length]), length(length) {
 		if (length > 0) {
+			bytesCopied()->increment(length);
 			memcpy((void*)data, toCopy, length);
 		}
 	}
 	StringRef(const uint8_t* data, int length) : data(data), length(length) {}
-	StringRef(const std::string& s) : data((const uint8_t*)s.c_str()), length((int)s.size()) {
+	// For string literals prefer "foo"_sr, which captures the length at compile time and
+	// avoids the runtime strlen walk this ctor performs. This ctor is for const char*
+	// values whose length isn't known at compile time (e.g: from  C APIs or interop).
+	// Borrows the pointer and computes length via strlen, like std::string_view.
+	// Marked explicit so that existing `f("literal")` calls that resolve against
+	// overload pairs like f(std::string) / f(StringRef) keep picking std::string,
+	// avoiding ambiguity. Direct-init `StringRef s("literal")` still selects this
+	// constructor — which is the actual use-after-free case this guards against.
+	// Precondition: str is not null.
+	explicit StringRef(const char* str) : StringRef(str, strlen(str)) {}
+	explicit StringRef(std::nullptr_t) = delete;
+	// Reject integer literals (e.g. StringRef(0)), which would otherwise pick the const char*
+	// overload via null-pointer conversion and crash in strlen.
+	explicit StringRef(int) = delete;
+	explicit(false) StringRef(const std::string& s) : data((const uint8_t*)s.c_str()), length((int)s.size()) {
 		if (s.size() > std::numeric_limits<int>::max())
 			abort();
 	}
@@ -424,7 +432,10 @@ public:
 	}
 
 	StringRef withPrefix(const StringRef& prefix, Arena& arena) const {
-		uint8_t* s = new (arena) uint8_t[prefix.size() + size()];
+		size_t len = prefix.size() + size();
+		uint8_t* s = new (arena) uint8_t[len];
+		bytesCopied()->increment(len);
+
 		if (prefix.size() > 0) {
 			memcpy(s, prefix.begin(), prefix.size());
 		}
@@ -435,7 +446,9 @@ public:
 	}
 
 	StringRef withSuffix(const StringRef& suffix, Arena& arena) const {
-		uint8_t* s = new (arena) uint8_t[suffix.size() + size()];
+		size_t len = suffix.size() + size();
+		uint8_t* s = new (arena) uint8_t[len];
+		bytesCopied()->increment(len);
 		if (size() > 0) {
 			memcpy(s, begin(), size());
 		}
@@ -469,47 +482,31 @@ public:
 		return substr(0, size() - s.size());
 	}
 
-	std::string toString() const { return std::string(reinterpret_cast<const char*>(data), length); }
+	std::string toString() const {
+		bytesCopied()->increment(length);
+		return std::string(reinterpret_cast<const char*>(data), length);
+	}
 
 	std::string_view toStringView() const { return std::string_view(reinterpret_cast<const char*>(data), length); }
 
 	static bool isPrintable(char c) { return c > 32 && c < 127; }
 	inline std::string printable() const;
 
-	std::string toHexString(int limit = -1) const {
-		if (limit < 0)
-			limit = length;
-		if (length > limit) {
-			// If limit is high enough split it so that 2/3 of limit is used to show prefix bytes and the rest is used
-			// for suffix bytes
-			if (limit >= 9) {
-				int suffix = limit / 3;
-				return substr(0, limit - suffix).toHexString() + "..." + substr(length - suffix, suffix).toHexString() +
-				       format(" [%d bytes]", length);
-			}
-			return substr(0, limit).toHexString() + format("...[%d]", length);
-		}
+	std::string toHexString(int limit = -1) const;
 
-		std::string s;
-		s.reserve(length * 7);
-		for (int i = 0; i < length; i++) {
-			uint8_t b = (*this)[i];
-			if (isalnum(b))
-				s.append(format("%02x (%c) ", b, b));
-			else
-				s.append(format("%02x ", b));
-		}
-		if (s.size() > 0)
-			s.resize(s.size() - 1);
-		return s;
-	}
+	// Get string with full content in hex format. Different digits are splitted by a space.
+	// This is currently used for bulk dumping manifest text file when recording key ranges.
+	std::string toFullHexStringPlain() const;
 
 	int expectedSize() const { return size(); }
 
 	int compare(StringRef const& other) const {
-		auto minSize = static_cast<int>(std::min(size(), other.size()));
+		int minSize = static_cast<int>(std::min(size(), other.size()));
 		if (minSize != 0) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overread"
 			int c = memcmp(begin(), other.begin(), minSize);
+#pragma GCC diagnostic pop
 			if (c != 0)
 				return c;
 		}
@@ -585,6 +582,7 @@ public:
 	// Copies string contents to dst and returns a pointer to the next byte after
 	uint8_t* copyTo(uint8_t* dst) const {
 		if (length > 0) {
+			bytesCopied()->increment(length);
 			memcpy(dst, data, length);
 		}
 		return dst + length;
@@ -604,7 +602,7 @@ public:
 
 private:
 	// Unimplemented; blocks conversion through std::string
-	StringRef(char*);
+	explicit StringRef(char*);
 
 	const uint8_t* data;
 	int length;
@@ -638,16 +636,14 @@ struct hash<Optional<T>> {
 };
 } // namespace std
 
-template <class T, class V = std::void_t<>>
-struct boost_hashable : std::false_type {};
-
 template <class T>
-struct boost_hashable<T, std::void_t<decltype(boost::hash_value(std::declval<T>()))>> : std::true_type {};
+concept boost_hashable = requires(T const& value) { boost::hash_value(value); };
 
 // Using boost hash functions on types that depend on member hashes (e.g. std::pair) expect the members
 // to be boost hashable. This provides a default boost hash function based on std::hash.
 template <class T>
-std::enable_if_t<!boost_hashable<T>::value, std::size_t> hash_value(const T& v) {
+    requires(!boost_hashable<T>)
+std::size_t hash_value(const T& v) {
 	return std::hash<T>{}(v);
 }
 
@@ -691,7 +687,7 @@ inline static uintptr_t getAlignedUpperBound(uintptr_t value, uintptr_t alignmen
 
 // makeString is used to allocate a Standalone<StringRef> of a known length for later
 // mutation (via mutateString).  If you need to append to a string of unknown length,
-// consider factoring StringBuffer from DiskQueue.actor.cpp.
+// consider factoring StringBuffer from DiskQueue.cpp.
 inline static Standalone<StringRef> makeString(int length) {
 	Standalone<StringRef> returnString;
 	uint8_t* outData = new (returnString.arena()) uint8_t[length];
@@ -725,6 +721,40 @@ inline static uint8_t* mutateString(StringRef& s) {
 	return const_cast<uint8_t*>(s.begin());
 }
 
+template <class... StringRefType>
+static Standalone<StringRef> concatenateStrings(StringRefType... strs) {
+	int totalSize = 0;
+	for (auto const& s : { strs... }) {
+		totalSize += s.size();
+	}
+
+	Standalone<StringRef> str = makeString(totalSize);
+	uint8_t* buf = mutateString(str);
+
+	for (auto const& s : { strs... }) {
+		buf = s.copyTo(buf);
+	}
+
+	return str;
+}
+
+template <class... StringRefType>
+static StringRef concatenateStrings(Arena& arena, StringRefType... strs) {
+	int totalSize = 0;
+	for (auto const& s : { strs... }) {
+		totalSize += s.size();
+	}
+
+	StringRef str = makeString(totalSize, arena);
+	uint8_t* buf = mutateString(str);
+
+	for (auto const& s : { strs... }) {
+		buf = s.copyTo(buf);
+	}
+
+	return str;
+}
+
 template <class Archive>
 inline void load(Archive& ar, StringRef& value) {
 	uint32_t length;
@@ -755,7 +785,7 @@ struct dynamic_size_traits<StringRef> : std::true_type {
 };
 
 inline bool operator==(const StringRef& lhs, const StringRef& rhs) {
-	if (lhs.size() == 0 && rhs.size() == 0) {
+	if (lhs.empty() && rhs.empty()) {
 		return true;
 	}
 	ASSERT(lhs.size() >= 0);
@@ -791,7 +821,7 @@ inline bool operator>=(const StringRef& lhs, const StringRef& rhs) {
 	return !(lhs < rhs);
 }
 
-typedef uint64_t Word;
+using Word = uint64_t;
 // Get the number of prefix bytes that are the same between a and b, up to their common length of cl
 static inline int commonPrefixLength(uint8_t const* ap, uint8_t const* bp, int cl) {
 	int i = 0;
@@ -856,12 +886,12 @@ enum class VecSerStrategy { FlatBuffers, String };
 
 template <class T, VecSerStrategy>
 struct VectorRefPreserializer {
-	VectorRefPreserializer() {}
-	VectorRefPreserializer(const VectorRefPreserializer<T, VecSerStrategy::FlatBuffers>&) noexcept {}
+	VectorRefPreserializer() = default;
+	explicit(false) VectorRefPreserializer(const VectorRefPreserializer<T, VecSerStrategy::FlatBuffers>&) noexcept {}
 	VectorRefPreserializer& operator=(const VectorRefPreserializer<T, VecSerStrategy::FlatBuffers>&) noexcept {
 		return *this;
 	}
-	VectorRefPreserializer(const VectorRefPreserializer<T, VecSerStrategy::String>&) noexcept {}
+	explicit(false) VectorRefPreserializer(const VectorRefPreserializer<T, VecSerStrategy::String>&) noexcept {}
 	VectorRefPreserializer& operator=(const VectorRefPreserializer<T, VecSerStrategy::String>&) noexcept {
 		return *this;
 	}
@@ -884,7 +914,8 @@ struct VectorRefPreserializer<T, VecSerStrategy::String> {
 		_cached_size = other._cached_size;
 		return *this;
 	}
-	VectorRefPreserializer(const VectorRefPreserializer<T, VecSerStrategy::FlatBuffers>&) noexcept : _cached_size(-1) {}
+	explicit(false) VectorRefPreserializer(const VectorRefPreserializer<T, VecSerStrategy::FlatBuffers>&) noexcept
+	  : _cached_size(-1) {}
 	VectorRefPreserializer& operator=(const VectorRefPreserializer<T, VecSerStrategy::FlatBuffers>&) noexcept {
 		_cached_size = -1;
 		return *this;
@@ -904,6 +935,8 @@ struct VectorRefPreserializer<T, VecSerStrategy::String> {
 	void reset() { _cached_size = 0; }
 };
 
+// FIXME: consider whether methods in this class should be instrumented to
+// count calls, bytes processed, etc.
 template <class T, VecSerStrategy SerStrategy = VecSerStrategy::FlatBuffers>
 class VectorRef : public ComposedIdentifier<T, 3>, public VectorRefPreserializer<T, SerStrategy> {
 	using VPS = VectorRefPreserializer<T, SerStrategy>;
@@ -921,7 +954,7 @@ public:
 	VectorRef() : data(0), m_size(0), m_capacity(0) {}
 
 	template <VecSerStrategy S>
-	VectorRef(const VectorRef<T, S>& other)
+	explicit(false) VectorRef(const VectorRef<T, S>& other)
 	  : VPS(other), data(other.data), m_size(other.m_size), m_capacity(other.m_capacity) {}
 	template <VecSerStrategy S>
 	VectorRef& operator=(const VectorRef<T, S>& other) {
@@ -934,7 +967,8 @@ public:
 
 	// Arena constructor for non-Ref types, identified by !flow_ref
 	template <class T2 = T, VecSerStrategy S>
-	VectorRef(Arena& p, const VectorRef<T, S>& toCopy, typename std::enable_if<!flow_ref<T2>::value, int>::type = 0)
+	    requires(!flow_ref<T2>::value)
+	VectorRef(Arena& p, const VectorRef<T, S>& toCopy)
 	  : VPS(toCopy), data((T*)new(p) uint8_t[sizeof(T) * toCopy.size()]), m_size(toCopy.size()),
 	    m_capacity(toCopy.size()) {
 		if (m_size > 0) {
@@ -944,7 +978,8 @@ public:
 
 	// Arena constructor for Ref types, which must have an Arena constructor
 	template <class T2 = T, VecSerStrategy S>
-	VectorRef(Arena& p, const VectorRef<T, S>& toCopy, typename std::enable_if<flow_ref<T2>::value, int>::type = 0)
+	    requires(flow_ref<T2>::value)
+	VectorRef(Arena& p, const VectorRef<T, S>& toCopy)
 	  : VPS(), data((T*)new(p) uint8_t[sizeof(T) * toCopy.size()]), m_size(toCopy.size()), m_capacity(toCopy.size()) {
 		for (int i = 0; i < m_size; i++) {
 			auto ptr = new (&data[i]) T(p, toCopy[i]);
@@ -967,7 +1002,8 @@ public:
 	// toCopy.m_capacity ) {} VectorRef<T>& operator=( const VectorRef<T>& );
 
 	template <VecSerStrategy S = SerStrategy>
-	typename std::enable_if<S == VecSerStrategy::String, uint32_t>::type serializedSize() const {
+	    requires(S == VecSerStrategy::String)
+	uint32_t serializedSize() const {
 		uint32_t result = sizeof(uint32_t);
 		string_serialized_traits<T> t;
 		if (VPS::_cached_size >= 0) {
@@ -998,7 +1034,8 @@ public:
 	std::reverse_iterator<const T*> rend() const { return std::reverse_iterator<const T*>(begin()); }
 
 	template <VecSerStrategy S = SerStrategy>
-	typename std::enable_if<S == VecSerStrategy::FlatBuffers, VectorRef>::type slice(int begin, int end) const {
+	    requires(S == VecSerStrategy::FlatBuffers)
+	VectorRef slice(int begin, int end) const {
 		return VectorRef(data + begin, end - begin);
 	}
 
@@ -1132,13 +1169,15 @@ public:
 
 	// expectedSize() for non-Ref types, identified by !flow_ref
 	template <class T2 = T>
-	typename std::enable_if<!flow_ref<T2>::value, size_t>::type expectedSize() const {
+	    requires(!flow_ref<T2>::value)
+	size_t expectedSize() const {
 		return sizeof(T) * m_size;
 	}
 
 	// expectedSize() for Ref types, which must in turn have expectedSize() implemented.
 	template <class T2 = T>
-	typename std::enable_if<flow_ref<T2>::value, size_t>::type expectedSize() const {
+	    requires(flow_ref<T2>::value)
+	size_t expectedSize() const {
 		size_t t = sizeof(T) * m_size;
 		for (int i = 0; i < m_size; i++)
 			t += data[i].expectedSize();
@@ -1170,6 +1209,8 @@ protected:
 // that all of them are always copied. This should be faster
 // when you expect the vector to be usually very small as it
 // won't need allocations in these cases.
+// FIXME: assess whether methods in this class should be instrumented
+// with metrics. Currently this appears to be thinly used.
 template <class T, int InlineMembers = 1>
 class SmallVectorRef {
 	static_assert(InlineMembers >= 0);
@@ -1273,29 +1314,20 @@ public:
 
 public: // Construction
 	static_assert(std::is_trivially_destructible_v<T>);
-	SmallVectorRef() {}
+	SmallVectorRef() = default;
 	SmallVectorRef(const SmallVectorRef<T, InlineMembers>& other)
 	  : m_size(other.m_size), arr(other.arr), data(other.data) {}
-	SmallVectorRef& operator=(const SmallVectorRef<T, InlineMembers>& other) {
-		m_size = other.m_size;
-		arr = other.arr;
-		data = other.data;
-		return *this;
-	}
+	SmallVectorRef& operator=(const SmallVectorRef<T, InlineMembers>&) = default;
 
 	template <class T2 = T, int IM = InlineMembers>
-	SmallVectorRef(Arena& arena,
-	               const SmallVectorRef<T, IM>& toCopy,
-	               typename std::enable_if<!flow_ref<T2>::value, int>::type = 0)
-	  : m_size(0) {
+	    requires(!flow_ref<T2>::value)
+	SmallVectorRef(Arena& arena, const SmallVectorRef<T, IM>& toCopy, int = 0) : m_size(0) {
 		append(arena, toCopy.begin(), toCopy.size());
 	}
 
 	template <class T2 = T, int IM = InlineMembers>
-	SmallVectorRef(Arena& arena,
-	               const SmallVectorRef<T2, IM>& toCopy,
-	               typename std::enable_if<flow_ref<T2>::value, int>::type = 0)
-	  : m_size(0) {
+	    requires(flow_ref<T2>::value)
+	SmallVectorRef(Arena& arena, const SmallVectorRef<T2, IM>& toCopy, int = 0) : m_size(0) {
 		append_deep(arena, toCopy.begin(), toCopy.size());
 	}
 

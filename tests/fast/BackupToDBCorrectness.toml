@@ -2,8 +2,6 @@ testClass = "Backup"
 
 [configuration]
 extraDatabaseMode = 'LocalOrSingle'
-# DR is not currently supported in required tenant mode
-tenantModes = ['disabled', 'optional']
 
 [[test]]
 testTitle = 'BackupAndRestore'
@@ -15,7 +13,6 @@ simBackupAgents = 'BackupToDB'
     nodeCount = 30000
     transactionsPerSecond = 2500.0
     testDuration = 30.0
-    expectedRate = 0
 
     [[test.workload]]
     testName = 'BackupToDBCorrectness'

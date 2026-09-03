@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,9 @@
  */
 
 #include "flow/Arena.h"
-
+#include "flow/MemoryTracker.h"
+#include "flow/ScopeExit.h"
+#include "flow/SimpleCounter.h"
 #include "flow/UnitTest.h"
 #include "flow/ScopeExit.h"
 
@@ -107,12 +109,23 @@ void makeUndefined(void*, size_t) {}
 #endif
 } // namespace
 
-Arena::Arena() : impl(nullptr) {}
+static SimpleCounter<int64_t>* arenasCreated(void) {
+	static SimpleCounter<int64_t>* p = SimpleCounter<int64_t>::makeCounter("/flow/arena/arenasCreated");
+	return p;
+}
+
+Arena::Arena() {
+	arenasCreated()->increment(1);
+}
+
 Arena::Arena(size_t reservedSize) : impl(0) {
 	UNSTOPPABLE_ASSERT(reservedSize < std::numeric_limits<int>::max());
+	arenasCreated()->increment(1);
 	if (reservedSize) {
 		allowAccess(impl.getPtr());
 		ArenaBlock::create((int)reservedSize, impl);
+		static SimpleCounter<int64_t>* bytes = SimpleCounter<int64_t>::makeCounter("/flow/arena/arenaBytesReserved");
+		bytes->increment(reservedSize);
 		disallowAccess(impl.getPtr());
 	}
 }
@@ -120,6 +133,49 @@ Arena::Arena(const Arena& r) = default;
 Arena::Arena(Arena&& r) noexcept = default;
 Arena& Arena::operator=(const Arena& r) = default;
 Arena& Arena::operator=(Arena&& r) noexcept = default;
+
+std::string StringRef::toHexString(int limit) const {
+	if (limit < 0)
+		limit = length;
+	std::string rv;
+	if (length > limit) {
+		// If limit is high enough split it so that 2/3 of limit is used to show prefix bytes and the rest is used
+		// for suffix bytes
+		if (limit >= 9) {
+			int suffix = limit / 3;
+			return substr(0, limit - suffix).toHexString() + "..." + substr(length - suffix, suffix).toHexString() +
+			       format(" [%d bytes]", length);
+		}
+		rv = substr(0, limit).toHexString() + format("...[%d]", length);
+	} else {
+		rv.reserve(static_cast<size_t>(length) * 7);
+		for (int i = 0; i < length; i++) {
+			uint8_t b = (*this)[i];
+			if (isalnum(b))
+				rv.append(format("%02x (%c) ", b, b));
+			else
+				rv.append(format("%02x ", b));
+		}
+		if (!rv.empty())
+			rv.resize(rv.size() - 1);
+	}
+	bytesCopied()->increment(rv.length());
+	return rv;
+}
+
+std::string StringRef::toFullHexStringPlain() const {
+	std::string s;
+	s.reserve(static_cast<size_t>(length) * 7);
+	for (int i = 0; i < length; i++) {
+		uint8_t b = (*this)[i];
+		s.append(format("%02x ", b));
+	}
+	if (!s.empty())
+		s.resize(s.size() - 1);
+	bytesCopied()->increment(s.length());
+	return s;
+}
+
 void Arena::dependsOn(const Arena& p) {
 	// x.dependsOn(y) is a no-op if they refer to the same ArenaBlocks.
 	// They will already have the same lifetime.
@@ -138,12 +194,15 @@ void* Arena::allocate4kAlignedBuffer(uint32_t size) {
 
 size_t Arena::getSize(FastInaccurateEstimate fastInaccurateEstimate) const {
 	if (impl) {
+		static SimpleCounter<int64_t>* calls = SimpleCounter<int64_t>::makeCounter("/flow/arena/getSizeCalls");
+		calls->increment(1);
 		allowAccess(impl.getPtr());
 		size_t result;
 		if (fastInaccurateEstimate) {
 			result = impl->estimatedTotalSize();
 		} else {
-			result = impl->totalSize();
+			std::unordered_set<ArenaBlock*> visited;
+			result = impl->totalSize(visited);
 		}
 
 		disallowAccess(impl.getPtr());
@@ -208,7 +267,7 @@ const void* ArenaBlock::getNextData() const {
 	return (const uint8_t*)getData() + used();
 }
 
-size_t ArenaBlock::totalSize() const {
+size_t ArenaBlock::totalSize(std::unordered_set<ArenaBlock*>& visited) const {
 	if (isTiny()) {
 		return size();
 	}
@@ -218,13 +277,19 @@ size_t ArenaBlock::totalSize() const {
 	totalSizeEstimate = size();
 	int o = nextBlockOffset;
 	while (o) {
-		ArenaBlockRef* r = (ArenaBlockRef*)((char*)getData() + o);
+		static SimpleCounter<int64_t>* count =
+		    SimpleCounter<int64_t>::makeCounter("/flow/arena/totalSizeBlocksExamined");
+		count->increment(1);
+		auto* r = (ArenaBlockRef*)((char*)getData() + o);
 		makeDefined(r, sizeof(ArenaBlockRef));
 		if (r->aligned4kBufferSize != 0) {
 			totalSizeEstimate += r->aligned4kBufferSize;
 		} else {
 			allowAccess(r->next);
-			totalSizeEstimate += r->next->totalSize();
+			// Skip visited arenas and avoid stack overflow for circular references
+			if (visited.insert(r->next).second) {
+				totalSizeEstimate += r->next->totalSize(visited);
+			}
 			disallowAccess(r->next);
 		}
 		o = r->nextBlockOffset;
@@ -243,6 +308,8 @@ void ArenaBlock::wipeUsed() {
 	int dataOffset = isTiny() ? TINY_HEADER : sizeof(ArenaBlock);
 	void* dataBegin = (char*)getData() + dataOffset;
 	int dataSize = used() - dataOffset;
+	static SimpleCounter<int64_t>* bytesWiped = SimpleCounter<int64_t>::makeCounter("/flow/arena/bytesWiped");
+	bytesWiped->increment(dataSize);
 	makeDefined(dataBegin, dataSize);
 	::memset(dataBegin, 0, dataSize);
 	makeNoAccess(dataBegin, dataSize);
@@ -256,7 +323,7 @@ void ArenaBlock::getUniqueBlocks(std::set<ArenaBlock*>& a) {
 
 	int o = nextBlockOffset;
 	while (o) {
-		ArenaBlockRef* r = (ArenaBlockRef*)((char*)getData() + o);
+		auto* r = (ArenaBlockRef*)((char*)getData() + o);
 		makeDefined(r, sizeof(ArenaBlockRef));
 
 		// If next is valid recursively count its blocks
@@ -283,7 +350,7 @@ int ArenaBlock::addUsed(int bytes) {
 }
 
 void ArenaBlock::makeReference(ArenaBlock* next) {
-	ArenaBlockRef* r = (ArenaBlockRef*)((char*)getData() + bigUsed);
+	auto* r = (ArenaBlockRef*)((char*)getData() + bigUsed);
 	makeDefined(r, sizeof(ArenaBlockRef));
 	r->aligned4kBufferSize = 0;
 	r->next = next;
@@ -295,7 +362,7 @@ void ArenaBlock::makeReference(ArenaBlock* next) {
 }
 
 void* ArenaBlock::make4kAlignedBuffer(uint32_t size) {
-	ArenaBlockRef* r = (ArenaBlockRef*)((char*)getData() + bigUsed);
+	auto* r = (ArenaBlockRef*)((char*)getData() + bigUsed);
 	makeDefined(r, sizeof(ArenaBlockRef));
 	r->aligned4kBufferSize = size;
 	r->aligned4kBuffer = allocateFast4kAligned(size);
@@ -328,6 +395,13 @@ void* ArenaBlock::dependOn4kAlignedBuffer(Reference<ArenaBlock>& self, uint32_t 
 }
 
 void* ArenaBlock::allocate(Reference<ArenaBlock>& self, int bytes, IsSecureMem isSecure) {
+	static SimpleCounter<int64_t>* arenaBlockAllocations =
+	    SimpleCounter<int64_t>::makeCounter("/flow/arena/arenaBlockAllocations");
+	static SimpleCounter<int64_t>* arenaBlockBytesAllocated =
+	    SimpleCounter<int64_t>::makeCounter("/flow/arena/arenaBlockBytesAllocated");
+	arenaBlockAllocations->increment(1);
+	arenaBlockBytesAllocated->increment(bytes);
+
 	ArenaBlock* b = self.getPtr();
 	allowAccess(b);
 	if (!self || self->unused() < bytes) {
@@ -347,6 +421,8 @@ void* ArenaBlock::allocate(Reference<ArenaBlock>& self, int bytes, IsSecureMem i
 // Return an appropriately-sized ArenaBlock to store the given data
 ArenaBlock* ArenaBlock::create(int dataSize, Reference<ArenaBlock>& next) {
 	ArenaBlock* b;
+	static SimpleCounter<int64_t>* created = SimpleCounter<int64_t>::makeCounter("/flow/arena/arenaBlocksCreated");
+	created->increment(1);
 	// all blocks are initialized with no-wipe by default. allocate() sets it, if needed.
 	if (dataSize <= SMALL - TINY_HEADER && !next) {
 		static_assert(sizeof(ArenaBlock) <= 32); // Need to allocate at least sizeof(ArenaBlock) for an ArenaBlock*. See
@@ -377,6 +453,7 @@ ArenaBlock* ArenaBlock::create(int dataSize, Reference<ArenaBlock>& next) {
 		}
 
 		if (reqSize < LARGE) {
+			// NOTE: FastAlloc.* maintains metrics on its ::allocate calls.
 			if (reqSize <= 128) {
 				b = (ArenaBlock*)FastAllocator<128>::allocate();
 				b->bigSize = 128;
@@ -385,36 +462,55 @@ ArenaBlock* ArenaBlock::create(int dataSize, Reference<ArenaBlock>& next) {
 				b = (ArenaBlock*)FastAllocator<256>::allocate();
 				b->bigSize = 256;
 				INSTRUMENT_ALLOCATE("Arena256");
-			} else if (reqSize <= 512) {
-				b = (ArenaBlock*)allocateAndMaybeKeepalive(512);
-				b->bigSize = 512;
-				INSTRUMENT_ALLOCATE("Arena512");
-			} else if (reqSize <= 1024) {
-				b = (ArenaBlock*)allocateAndMaybeKeepalive(1024);
-				b->bigSize = 1024;
-				INSTRUMENT_ALLOCATE("Arena1024");
-			} else if (reqSize <= 2048) {
-				b = (ArenaBlock*)allocateAndMaybeKeepalive(2048);
-				b->bigSize = 2048;
-				INSTRUMENT_ALLOCATE("Arena2048");
-			} else if (reqSize <= 4096) {
-				b = (ArenaBlock*)allocateAndMaybeKeepalive(4096);
-				b->bigSize = 4096;
-				INSTRUMENT_ALLOCATE("Arena4096");
 			} else {
-				b = (ArenaBlock*)allocateAndMaybeKeepalive(8192);
-				b->bigSize = 8192;
-				INSTRUMENT_ALLOCATE("Arena8192");
+				// Suppress the operator-new[] memory-tracker hook around the
+				// underlying `new uint8_t[]`; the explicit memTrackerOnAlloc
+				// below is the sole hook for these blocks. Without this
+				// guard the same pointer would be tracked twice under two
+				// different fingerprints.
+				MemTrackerSuppress _suppress;
+				if (reqSize <= 512) {
+					b = (ArenaBlock*)allocateAndMaybeKeepalive(512);
+					b->bigSize = 512;
+					INSTRUMENT_ALLOCATE("Arena512");
+				} else if (reqSize <= 1024) {
+					b = (ArenaBlock*)allocateAndMaybeKeepalive(1024);
+					b->bigSize = 1024;
+					INSTRUMENT_ALLOCATE("Arena1024");
+				} else if (reqSize <= 2048) {
+					b = (ArenaBlock*)allocateAndMaybeKeepalive(2048);
+					b->bigSize = 2048;
+					INSTRUMENT_ALLOCATE("Arena2048");
+				} else if (reqSize <= 4096) {
+					b = (ArenaBlock*)allocateAndMaybeKeepalive(4096);
+					b->bigSize = 4096;
+					INSTRUMENT_ALLOCATE("Arena4096");
+				} else {
+					b = (ArenaBlock*)allocateAndMaybeKeepalive(8192);
+					b->bigSize = 8192;
+					INSTRUMENT_ALLOCATE("Arena8192");
+				}
 			}
 			b->totalSizeEstimate = b->bigSize;
 			b->tinySize = b->tinyUsed = NOT_TINY;
 			b->bigUsed = sizeof(ArenaBlock);
 			b->secure = 0;
+			// Block-level attribution for >256 sizes (sizes <=256 use FastAllocator,
+			// which fires its own memTrackerOnAlloc hook).
+			if (b->bigSize > 256) {
+				memTrackerOnAlloc(b, b->bigSize);
+			}
 		} else {
 #ifdef ALLOC_INSTRUMENTATION
 			allocInstr["ArenaHugeKB"].alloc((reqSize + 1023) >> 10);
 #endif
-			b = (ArenaBlock*)allocateAndMaybeKeepalive(reqSize);
+			{
+				// Suppress the operator-new[] hook so the explicit
+				// memTrackerOnAlloc below is the sole tracker for huge
+				// arena blocks (see comment in the small-block branch).
+				MemTrackerSuppress _suppress;
+				b = (ArenaBlock*)allocateAndMaybeKeepalive(reqSize);
+			}
 			b->tinySize = b->tinyUsed = NOT_TINY;
 			b->bigSize = reqSize;
 			b->totalSizeEstimate = b->bigSize;
@@ -430,6 +526,9 @@ ArenaBlock* ArenaBlock::create(int dataSize, Reference<ArenaBlock>& next) {
 			}
 #endif
 			g_hugeArenaMemory.fetch_add(reqSize);
+			// Block-level attribution for huge arena blocks. allocateAndMaybeKeepalive
+			// bypasses FastAllocator, so this is the only hook for these blocks.
+			memTrackerOnAlloc(b, reqSize);
 
 			// If the new block has less free space than the old block, make the old block depend on it
 			if (next && !next->isTiny() && next->unused() >= reqSize - dataSize) {
@@ -457,7 +556,7 @@ void ArenaBlock::destroy() {
 	Arena stackArena;
 	VectorRef<ArenaBlock*> stack(&tinyStack, 1);
 
-	while (stack.size()) {
+	while (!stack.empty()) {
 		ArenaBlock* b = stack.end()[-1];
 		stack.pop_back();
 		allowAccess(b);
@@ -465,7 +564,7 @@ void ArenaBlock::destroy() {
 		if (!b->isTiny()) {
 			int o = b->nextBlockOffset;
 			while (o) {
-				ArenaBlockRef* br = (ArenaBlockRef*)((char*)b->getData() + o);
+				auto* br = (ArenaBlockRef*)((char*)b->getData() + o);
 				makeDefined(br, sizeof(ArenaBlockRef));
 
 				// If aligned4kBuffer is valid, free it
@@ -483,6 +582,9 @@ void ArenaBlock::destroy() {
 			}
 		}
 		b->destroyLeaf();
+		static SimpleCounter<int64_t>* destroyed =
+		    SimpleCounter<int64_t>::makeCounter("/flow/arena/arenaBlocksDestroyed");
+		destroyed->increment(1);
 	}
 }
 
@@ -499,6 +601,7 @@ void ArenaBlock::destroyLeaf() {
 			INSTRUMENT_RELEASE("Arena64");
 		}
 	} else {
+		// NOTE: FastAlloc.* maintains counters on ::release calls/bytes.
 		if (bigSize <= 128) {
 			FastAllocator<128>::release(this);
 			INSTRUMENT_RELEASE("Arena128");
@@ -506,26 +609,50 @@ void ArenaBlock::destroyLeaf() {
 			FastAllocator<256>::release(this);
 			INSTRUMENT_RELEASE("Arena256");
 		} else if (bigSize <= 512) {
-			freeOrMaybeKeepalive(this);
+			memTrackerOnFree(this);
+			{
+				MemTrackerSuppress _suppress;
+				freeOrMaybeKeepalive(this);
+			}
 			INSTRUMENT_RELEASE("Arena512");
 		} else if (bigSize <= 1024) {
-			freeOrMaybeKeepalive(this);
+			memTrackerOnFree(this);
+			{
+				MemTrackerSuppress _suppress;
+				freeOrMaybeKeepalive(this);
+			}
 			INSTRUMENT_RELEASE("Arena1024");
 		} else if (bigSize <= 2048) {
-			freeOrMaybeKeepalive(this);
+			memTrackerOnFree(this);
+			{
+				MemTrackerSuppress _suppress;
+				freeOrMaybeKeepalive(this);
+			}
 			INSTRUMENT_RELEASE("Arena2048");
 		} else if (bigSize <= 4096) {
-			freeOrMaybeKeepalive(this);
+			memTrackerOnFree(this);
+			{
+				MemTrackerSuppress _suppress;
+				freeOrMaybeKeepalive(this);
+			}
 			INSTRUMENT_RELEASE("Arena4096");
 		} else if (bigSize <= 8192) {
-			freeOrMaybeKeepalive(this);
+			memTrackerOnFree(this);
+			{
+				MemTrackerSuppress _suppress;
+				freeOrMaybeKeepalive(this);
+			}
 			INSTRUMENT_RELEASE("Arena8192");
 		} else {
 #ifdef ALLOC_INSTRUMENTATION
 			allocInstr["ArenaHugeKB"].dealloc((bigSize + 1023) >> 10);
 #endif
 			g_hugeArenaMemory.fetch_sub(bigSize);
-			freeOrMaybeKeepalive(this);
+			memTrackerOnFree(this);
+			{
+				MemTrackerSuppress _suppress;
+				freeOrMaybeKeepalive(this);
+			}
 		}
 	}
 }
@@ -823,12 +950,12 @@ TEST_CASE("flow/StringRef/eat") {
 	str = "testcase"_sr;
 	first = str.eat("/"_sr);
 	ASSERT(first == "testcase"_sr);
-	ASSERT(str == ""_sr);
+	ASSERT(str.empty());
 
 	str = "testcase/"_sr;
 	first = str.eat("/"_sr);
 	ASSERT(first == "testcase"_sr);
-	ASSERT(str == ""_sr);
+	ASSERT(str.empty());
 
 	str = "test/case/extra"_sr;
 	first = str.eat("/"_sr);
@@ -846,7 +973,26 @@ TEST_CASE("flow/StringRef/eat") {
 	first = str.eat("/", &hasSep);
 	ASSERT(!hasSep);
 	ASSERT(first == "testcase"_sr);
-	ASSERT(str == ""_sr);
+	ASSERT(str.empty());
+
+	return Void();
+}
+
+// Verifies StringRef(const char*) borrows the pointer directly (like std::string_view)
+// rather than routing through a temporary std::string, which would leave a dangling pointer.
+TEST_CASE("/flow/StringRef/ConstCharConstructor") {
+	StringRef s("Hello world!");
+	ASSERT(s == "Hello world!"_sr);
+	ASSERT(s.size() == 12);
+
+	const char* cstr = "another string";
+	StringRef s2(cstr);
+	ASSERT(s2 == "another string"_sr);
+	ASSERT(s2.begin() == reinterpret_cast<const uint8_t*>(cstr));
+
+	StringRef empty("");
+	ASSERT(empty.empty());
+	ASSERT(empty.empty());
 
 	return Void();
 }

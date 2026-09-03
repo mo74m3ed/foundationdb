@@ -3,7 +3,7 @@
 #
 # This source file is part of the FoundationDB open source project
 #
-# Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+# Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,15 +18,11 @@
 # limitations under the License.
 #
 
-import random
-import struct
-
 import fdb
 import fdb.tuple
 
 from bindingtester import FDB_API_VERSION
-from bindingtester import util
-from bindingtester.tests import Test, Instruction, InstructionSet, ResultSpecification
+from bindingtester.tests import Test, InstructionSet, ResultSpecification
 from bindingtester.tests import test_util
 
 fdb.api_version(FDB_API_VERSION)

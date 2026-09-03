@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,8 @@
 #include <atomic>
 #include <cstdint>
 #include "flow/Traceable.h"
+
+#include "swift_support.h"
 
 // The thread safety this class provides is that it's safe to call addref and
 // delref on the same object concurrently in different threads. Subclass does
@@ -112,12 +114,12 @@ public:
 	Reference(Reference&& r) noexcept : ptr(r.getPtr()) { r.ptr = nullptr; }
 
 	template <class Q>
-	Reference(const Reference<Q>& r) : ptr(r.getPtr()) {
+	explicit(false) Reference(const Reference<Q>& r) : ptr(r.getPtr()) {
 		if (ptr)
 			addref(ptr);
 	}
 	template <class Q>
-	Reference(Reference<Q>&& r) : ptr(r.getPtr()) {
+	explicit(false) Reference(Reference<Q>&& r) : ptr(r.getPtr()) {
 		r.setPtrUnsafe(nullptr);
 	}
 

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,21 +20,21 @@
 
 #include "flow/Error.h"
 #include "flow/OTELMetrics.h"
-#include "flow/TDMetric.actor.h"
+#include "flow/TDMetric.h"
 #include "flow/flow.h"
 #include <cctype>
 #include <cstddef>
 #include <string>
 
-const StringRef BaseEventMetric::metricType = "Event"_sr;
+alignas(8) const StringRef BaseEventMetric::metricType = "Event"_sr;
 template <>
-const StringRef Int64Metric::metricType = "Int64"_sr;
+alignas(8) const StringRef Int64Metric::metricType = "Int64"_sr;
 template <>
-const StringRef DoubleMetric::metricType = "Double"_sr;
+alignas(8) const StringRef DoubleMetric::metricType = "Double"_sr;
 template <>
-const StringRef BoolMetric::metricType = "Bool"_sr;
+alignas(8) const StringRef BoolMetric::metricType = "Bool"_sr;
 template <>
-const StringRef StringMetric::metricType = "String"_sr;
+alignas(8) const StringRef StringMetric::metricType = "String"_sr;
 
 std::string reduceFilename(std::string const& filename) {
 	std::string r = filename;
@@ -84,7 +84,7 @@ void MetricKeyRef::writeMetricName(BinaryWriter& wr) const {
 	wr.serializeBytes("\x00"_sr);
 }
 
-const Standalone<StringRef> MetricKeyRef::packLatestKey() const {
+Standalone<StringRef> MetricKeyRef::packLatestKey() const {
 	BinaryWriter wr(Unversioned());
 	wr.serializeBytes(prefix);
 	wr.serializeBytes("\x01TDMetricsLastValue\x00"_sr);
@@ -92,7 +92,7 @@ const Standalone<StringRef> MetricKeyRef::packLatestKey() const {
 	return wr.toValue();
 }
 
-const Standalone<StringRef> MetricKeyRef::packDataKey(int64_t time) const {
+Standalone<StringRef> MetricKeyRef::packDataKey(int64_t time) const {
 	BinaryWriter wr(Unversioned());
 	wr.serializeBytes(prefix);
 	if (isField())
@@ -108,7 +108,7 @@ const Standalone<StringRef> MetricKeyRef::packDataKey(int64_t time) const {
 	return wr.toValue();
 }
 
-const Standalone<StringRef> MetricKeyRef::packFieldRegKey() const {
+Standalone<StringRef> MetricKeyRef::packFieldRegKey() const {
 	ASSERT(isField());
 	BinaryWriter wr(Unversioned());
 	wr.serializeBytes(prefix);
@@ -315,7 +315,7 @@ bool isNumber(const std::string& num) {
 		}
 	}
 
-	// Iterate through the string and make sure every char is a digit and there is only one occurence of "."
+	// Iterate through the string and make sure every char is a digit and there is only one occurrence of "."
 	int dot_count = 0;
 	for (size_t i = start; i < num.size(); i++) {
 		if (!std::isdigit(num[i])) {
@@ -337,7 +337,7 @@ bool isNumber(const std::string& num) {
     <name>:<value>|<type>|#<tag1-key>:<tag1-value>,<tag2-k/v>
 
     Where name consists of only upper or lowercase letters (no symbols),
-    value is numeric (postive or negative, integer or decimal),
+    value is numeric (positive or negative, integer or decimal),
     type is one of "g", "c",
 
 */

@@ -17,6 +17,7 @@ cmake-build-*/
 *.g.S
 *.g.asm
 *.pom
+fdbserver/include/fdbserver/FDBRocksDBVersion.h
 bindings/java/pom*.xml
 bindings/java/src*/main/overview.html
 bindings/java/src*/main/com/apple/foundationdb/NetworkOptions.java
@@ -57,6 +58,7 @@ bindings/java/.classstamp*
 bindings/java/classes*/
 bindings/java/javadoc*/
 packaging/docker/website
+loopback-cluster/
 
 # Testing and logging
 packaging/msi/*.log
@@ -85,7 +87,6 @@ foundationdb.VC.db
 foundationdb.VC.VC.opendb
 ipch/
 compile_commands.json
-flow/actorcompiler/obj
 flow/coveragetool/obj
 *.code-workspace
 
@@ -94,6 +95,7 @@ flow/coveragetool/obj
 /.ccls-cache
 /.clangd
 /.cache
+TAGS
 
 # Temporary and user configuration files
 *~
@@ -108,3 +110,8 @@ temp/
 /.ccls-cache
 .clangd/
 .stignore
+
+# AI assistants
+*.aider*
+*.fdq
+.claude/

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2025 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,11 @@
 #define FDBCLIENT_STORAGCHECKPOINT_H
 #pragma once
 
+#include "fdbclient/BulkLoading.h"
 #include "fdbclient/FDBTypes.h"
+
+const std::string checkpointBytesSampleFileName = "metadata_bytes.sst";
+const std::string emptySstFilePath = "Dummy Empty SST File Path";
 
 // FDB storage checkpoint format.
 enum CheckpointFormat {
@@ -58,11 +62,14 @@ public:
 	std::vector<UID> src; // Storage server(s) on which this checkpoint is created.
 	UID checkpointID; // A unique id for this checkpoint.
 	int16_t state; // CheckpointState.
+	Optional<std::string> bytesSampleFile;
 
 	// A serialized metadata associated with format, this data can be understood by the corresponding KVS.
 	Standalone<StringRef> serializedCheckpoint;
 
 	Optional<UID> actionId; // Unique ID defined by the application.
+
+	std::string dir;
 
 	CheckpointMetaData() = default;
 	CheckpointMetaData(const std::vector<KeyRange>& ranges,
@@ -88,6 +95,10 @@ public:
 
 	void setFormat(CheckpointFormat format) { this->format = static_cast<int16_t>(format); }
 
+	void setSerializedCheckpoint(Standalone<StringRef> checkpoint);
+
+	Standalone<StringRef> getSerializedCheckpoint() const;
+
 	bool hasRange(const KeyRangeRef range) const {
 		for (const auto& checkpointRange : ranges) {
 			if (checkpointRange.contains(range)) {
@@ -106,33 +117,42 @@ public:
 		return true;
 	}
 
+	bool containsKey(const KeyRef key) const {
+		for (const auto& range : ranges) {
+			if (range.contains(key)) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	bool operator==(const CheckpointMetaData& r) const { return checkpointID == r.checkpointID; }
 
 	std::string toString() const {
 		std::string res = "Checkpoint MetaData: [Ranges]: " + describe(ranges) +
 		                  " [Version]: " + std::to_string(version) + " [Format]: " + std::to_string(format) +
-		                  " [Server]: " + describe(src) + " [ID]: " + checkpointID.toString() +
-		                  " [State]: " + std::to_string(static_cast<int>(state)) +
-		                  (actionId.present() ? (" [Action ID]: " + actionId.get().toString()) : "");
+		                  " [Checkpoint Dir:] " + dir + " [Server]: " + describe(src) +
+		                  " [ID]: " + checkpointID.toString() + " [State]: " + std::to_string(static_cast<int>(state)) +
+		                  (actionId.present() ? (" [Action ID]: " + actionId.get().toString()) : "") +
+		                  (bytesSampleFile.present() ? " [bytesSampleFile]: " + bytesSampleFile.get() : "");
 		;
 		return res;
 	}
 
 	template <class Ar>
 	void serialize(Ar& ar) {
-		// In SFC FDB 71.2, the serialization order is serializer(ar, version, range, format, state, checkpointID, ssID,
-		// gcTime, serializedCheckpoint); We shouldn't change it until we don't support upgrade from 71.2
 		serializer(ar,
 		           version,
-		           deprecated_range,
+		           ranges,
 		           format,
 		           state,
 		           checkpointID,
-		           deprecated_sid,
-		           deprecated_gcTime,
+		           src,
 		           serializedCheckpoint,
-		           ranges,
-		           actionId);
+		           actionId,
+		           bytesSampleFile,
+		           dir);
 	}
 };
 
@@ -170,6 +190,7 @@ public:
 	std::set<UID> checkpoints;
 	int16_t phase; // DataMoveMetaData::Phase.
 	int8_t mode;
+	Optional<BulkLoadTaskState> bulkLoadTaskState; // set if the data move is a bulk load data move
 
 	DataMoveMetaData() = default;
 	DataMoveMetaData(UID id, Version version, KeyRange range) : id(id), version(version), priority(0), mode(0) {
@@ -178,6 +199,7 @@ public:
 	DataMoveMetaData(UID id, KeyRange range) : id(id), version(invalidVersion), priority(0), mode(0) {
 		this->ranges.push_back(range);
 	}
+	explicit DataMoveMetaData(UID id) : id(id), version(invalidVersion), priority(0), mode(0) {}
 
 	Phase getPhase() const { return static_cast<Phase>(phase); }
 
@@ -186,29 +208,17 @@ public:
 	std::string toString() const {
 		std::string res = "DataMoveMetaData: [ID]: " + id.shortString() + ", [Range]: " + describe(ranges) +
 		                  ", [Phase]: " + std::to_string(static_cast<int>(phase)) +
-		                  ", [Source Servers]: " + describe(src) + ", [Destination Servers]: " + describe(dest);
+		                  ", [Source Servers]: " + describe(src) + ", [Destination Servers]: " + describe(dest) +
+		                  ", [Checkpoints]: " + describe(checkpoints);
+		if (bulkLoadTaskState.present()) {
+			res = res + ", [BulkLoadTaskID]: " + bulkLoadTaskState.get().getTaskId().toString();
+		}
 		return res;
 	}
 
 	template <class Ar>
 	void serialize(Ar& ar) {
-		// In FDB 71.2, the serialization order is serializer(ar, id, version, range, phase, src, dest);
-		// We shouldn't change it until we don't support upgrade from 71.2
-		if (ar.isDeserializing) {
-			serializer(ar, id, version, deprecated_range, phase, src, dest, ranges, checkpoints, priority, mode);
-			if (!deprecated_range.empty() && ranges.empty()) {
-				// upgrade from 71.2 so ranges is empty
-				ranges.push_back(deprecated_range);
-			}
-		} else {
-			if (ranges.empty()) {
-				serializer(ar, id, version, deprecated_range, phase, src, dest, ranges, checkpoints, priority, mode);
-			} else {
-				// In case of degraded to 71.2 which only has a single key range rather than using the vector of range,
-				// we serialize the first element of ranges.
-				serializer(ar, id, version, ranges[0], phase, src, dest, ranges, checkpoints, priority, mode);
-			}
-		}
+		serializer(ar, id, version, ranges, priority, src, dest, checkpoints, phase, mode, bulkLoadTaskState);
 	}
 };
 

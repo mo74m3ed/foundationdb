@@ -1,5 +1,6 @@
 [configuration]
-disableEncryption=true
+encryptModes = ['disabled']
+tenantModes = ['disabled']
 
 [[test]]
 testTitle='CloggedConfigureDatabaseTest'

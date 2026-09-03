@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@
 
 #include "flow/IThreadPool.h"
 
-#include <algorithm>
 // The ifndef's allow us to compile with pre-built boost.  Otherwise, we get
 // errors about double-defines.  As of this writing, the automatically downloaded
 // build of boost doesn't define these, but the pre-built version does.  (The old
@@ -76,7 +75,7 @@ class ThreadPool final : public IThreadPool, public ReferenceCounted<ThreadPool>
 
 	struct ActionWrapper {
 		PThreadAction action;
-		ActionWrapper(PThreadAction action) : action(action) {}
+		explicit ActionWrapper(PThreadAction action) : action(action) {}
 		// HACK: Boost won't use move constructors, so we just assume the last copy made is the one that will be called
 		// or cancelled
 		ActionWrapper(ActionWrapper const& r) : action(r.action) { const_cast<ActionWrapper&>(r).action = nullptr; }
@@ -94,7 +93,7 @@ class ThreadPool final : public IThreadPool, public ReferenceCounted<ThreadPool>
 
 public:
 	ThreadPool(int stackSize, int pri) : dontstop(ios), mode(Run), stackSize(stackSize), pri(pri) {}
-	~ThreadPool() override {}
+	~ThreadPool() override = default;
 	Future<Void> stop(Error const& e = success()) override {
 		if (mode == Shutdown)
 			return Void();
@@ -105,7 +104,18 @@ public:
 			waitThread(threads[i]->handle);
 			delete threads[i];
 		}
-		ReferenceCounted<ThreadPool>::delref();
+		// There are two primary cases for calling stop():
+		// 1. Explicit stopped by an external caller.
+		//    The caller still holds a reference, so refcount is at least 2.
+		//    We only need to release the refcount we added above, so that
+		//    use delref_no_destroy() here is safe.
+		// 2. Implicit stopped by the final destruction, the backtrace is
+		//    ~Reference<ThreadPool>() -> ThreadPool::delref() -> ThreadPool::stop().
+		//    In this case, the refcount is 0 before invoking stop() and it
+		//    becomes 1 at this point. We should not invoke delref() here
+		//    as the destruction is handled by ThreadPool::delref() to avoid
+		//    double free error.
+		ReferenceCounted<ThreadPool>::delref_no_destroy();
 		return Void();
 	}
 
@@ -126,7 +136,7 @@ public:
 };
 
 Reference<IThreadPool> createGenericThreadPool(int stackSize, int pri) {
-	return Reference<IThreadPool>(new ThreadPool(stackSize, pri));
+	return makeReference<ThreadPool>(stackSize, pri);
 }
 
 thread_local IThreadPoolReceiver* ThreadPool::Thread::threadUserObject;

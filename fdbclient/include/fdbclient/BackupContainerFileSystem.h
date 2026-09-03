@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -71,18 +71,12 @@ public:
 	void addref() override = 0;
 	void delref() override = 0;
 
-	BackupContainerFileSystem() {}
-	~BackupContainerFileSystem() override {}
+	BackupContainerFileSystem() = default;
+	~BackupContainerFileSystem() override = default;
 
 	// Create the container
 	Future<Void> create() override = 0;
 	Future<bool> exists() override = 0;
-
-	// TODO: refactor this to separate out the "deal with blob store" stuff from the backup business logic
-	static Reference<BackupContainerFileSystem> openContainerFS(const std::string& url,
-	                                                            const Optional<std::string>& proxy,
-	                                                            const Optional<std::string>& encryptionKeyFileName,
-	                                                            bool isBackup = true);
 
 	// Get a list of fileNames and their sizes in the container under the given path
 	// Although not required, an implementation can avoid traversing unwanted subfolders
@@ -115,6 +109,12 @@ public:
 	                                                  uint16_t tagId,
 	                                                  int totalTags) final;
 
+	Future<Reference<IBackupFile>> writeRangePartitionedLogFile(Version beginVersion,
+	                                                            Version endVersion,
+	                                                            Version baseVersion,
+	                                                            int32_t partitionId,
+	                                                            int blockSize) final;
+
 	Future<Reference<IBackupFile>> writeRangeFile(Version snapshotBeginVersion,
 	                                              int snapshotFileCount,
 	                                              Version fileVersion,
@@ -126,11 +126,16 @@ public:
 	Future<Void> writeKeyspaceSnapshotFile(const std::vector<std::string>& fileNames,
 	                                       const std::vector<std::pair<Key, Key>>& beginEndKeys,
 	                                       int64_t totalBytes,
-	                                       IncludeKeyRangeMap IncludeKeyRangeMap) final;
+	                                       IncludeKeyRangeMap IncludeKeyRangeMap,
+	                                       Optional<SnapshotMetadata> metadata = Optional<SnapshotMetadata>()) final;
+
+	Future<Void> writePartitionListFile(Version v, std::string contents) override;
 
 	// List log files, unsorted, which contain data at any version >= beginVersion and <= targetVersion.
-	// "partitioned" flag indicates if new partitioned mutation logs or old logs should be listed.
-	Future<std::vector<LogFile>> listLogFiles(Version beginVersion, Version targetVersion, bool partitioned);
+	// "mutationLogType" value indicates which mutation log files should be listed.
+	Future<std::vector<LogFile>> listLogFiles(Version beginVersion,
+	                                          Version targetVersion,
+	                                          MutationLogType mutationLogType);
 
 	// List range files, unsorted, which contain data at or between beginVersion and endVersion
 	// Note: The contents of each top level snapshot.N folder do not necessarily constitute a valid snapshot
@@ -163,12 +168,23 @@ public:
 	                                                  Version beginVersion) final;
 	static Future<Void> createTestEncryptionKeyFile(std::string const& filename);
 
+	Future<Void> writeEncryptionMetadata(int encryptionBlockSize) override;
+
+	// Waits for encryption initialization to complete by reading encryption key file during container opening.
+	Future<Void> encryptionSetupComplete() const override;
+
+	int getEncryptionBlockSize() const override { return encryptionBlockSize; }
+	void setEncryptionBlockSize(int blockSize) override { encryptionBlockSize = blockSize; }
+
 protected:
+	// Returns true if an encryption key file was provided.
 	bool usesEncryption() const;
+
 	void setEncryptionKey(Optional<std::string> const& encryptionKeyFileName);
-	Future<Void> encryptionSetupComplete() const;
 
 	Future<Void> writeEntireFileFallback(const std::string& fileName, const std::string& fileContents);
+
+	int encryptionBlockSize = 0;
 
 private:
 	struct VersionProperty {
@@ -181,7 +197,7 @@ private:
 		Future<Void> clear();
 	};
 
-	// To avoid the need to scan the underyling filesystem in many cases, some important version boundaries are stored
+	// To avoid the need to scan the underlying filesystem in many cases, some important version boundaries are stored
 	// in named files. These versions also indicate what version ranges are known to be deleted or partially deleted.
 	//
 	// The values below describe version ranges as follows:
@@ -196,6 +212,8 @@ private:
 	VersionProperty expiredEndVersion();
 	VersionProperty unreliableEndVersion();
 	VersionProperty logType();
+
+	static std::string encryptionMetadataFileName();
 
 	// List range files, unsorted, which contain data at or between beginVersion and endVersion
 	// NOTE: This reads the range file folder schema from FDB 6.0.15 and earlier and is provided for backward

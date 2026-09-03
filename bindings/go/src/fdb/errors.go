@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,9 +20,11 @@
 
 // FoundationDB Go API
 
+//go:generate go run ./internal/gen_errors/main.go -in ../../../flow/include/flow/error_definitions.h -out fdb/error_codes_generated.go
+
 package fdb
 
-// #define FDB_API_VERSION 710300
+// #define FDB_API_VERSION 800
 // #include <foundationdb/fdb_c.h>
 import "C"
 
@@ -34,10 +36,12 @@ import (
 // Error may be returned by any FoundationDB API function that returns error, or
 // as a panic from any FoundationDB API function whose name ends with OrPanic.
 //
-// You may compare the Code field of an Error against the list of FoundationDB
-// error codes at https://apple.github.io/foundationdb/api-error-codes.html,
-// but generally an Error should be passed to (Transaction).OnError. When using
-// (Database).Transact, non-fatal errors will be retried automatically.
+// Use errors.Is with the sentinel variables defined in error_codes_generated.go
+// to check for specific error codes:
+//
+//	errors.Is(err, fdb.ErrTransactionTooOld)
+//
+// When using (Database).Transact, non-fatal errors will be retried automatically.
 type Error struct {
 	Code int
 }
@@ -46,12 +50,15 @@ func (e Error) Error() string {
 	return fmt.Sprintf("FoundationDB error code %d (%s)", e.Code, C.GoString(C.fdb_get_error(C.fdb_error_t(e.Code))))
 }
 
-// SOMEDAY: these (along with others) should be coming from fdb.options?
-
-var (
-	errNetworkNotSetup = Error{2008}
-
-	errAPIVersionUnset        = Error{2200}
-	errAPIVersionAlreadySet   = Error{2201}
-	errAPIVersionNotSupported = Error{2203}
-)
+// Is implements the errors.Is contract. It matches target if target is an Error
+// or *Error with the same Code, enabling errors.Is(err, fdb.ErrTransactionTooOld).
+func (e Error) Is(target error) bool {
+	switch t := target.(type) {
+	case Error:
+		return e.Code == t.Code
+	case *Error:
+		return t != nil && e.Code == t.Code
+	default:
+		return false
+	}
+}

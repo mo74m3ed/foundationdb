@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@
 
 #include <atomic>
 #include <array>
+#include <latch>
 
 #include "flow/Error.h"
 #include "flow/Trace.h"
@@ -63,6 +64,8 @@ public:
 #endif
 	}
 	void enter() {
+		// The architecture-specific body is selected by the preprocessor.
+		// NOLINTNEXTLINE(readability-braces-around-statements)
 		while (isLocked.test_and_set(std::memory_order_acquire))
 #if defined(__aarch64__)
 			__asm__ volatile("isb");
@@ -99,30 +102,31 @@ class ThreadSpinLockHolder {
 	ThreadSpinLock& lock;
 
 public:
-	ThreadSpinLockHolder(ThreadSpinLock& lock) : lock(lock) { lock.enter(); }
+	explicit ThreadSpinLockHolder(ThreadSpinLock& lock) : lock(lock) { lock.enter(); }
+	ThreadSpinLockHolder(const ThreadSpinLockHolder& lock) = delete;
 	~ThreadSpinLockHolder() { lock.leave(); }
 };
 
 class ThreadUnsafeSpinLock {
 public:
-	void enter(){};
-	void leave(){};
-	void assertNotEntered(){};
+	void enter() {};
+	void leave() {};
+	void assertNotEntered() {};
 };
 class ThreadUnsafeSpinLockHolder {
 public:
-	ThreadUnsafeSpinLockHolder(ThreadUnsafeSpinLock&){};
+	explicit ThreadUnsafeSpinLockHolder(ThreadUnsafeSpinLock&) {};
 };
 
 #if FLOW_THREAD_SAFE
 
-typedef ThreadSpinLock SpinLock;
-typedef ThreadSpinLockHolder SpinLockHolder;
+using SpinLock = ThreadSpinLock;
+using SpinLockHolder = ThreadSpinLockHolder;
 
 #else
 
-typedef ThreadUnsafeSpinLock SpinLock;
-typedef ThreadUnsafeSpinLockHolder SpinLockHolder;
+using SpinLock = ThreadUnsafeSpinLock;
+using SpinLockHolder = ThreadUnsafeSpinLockHolder;
 
 #endif
 
@@ -134,16 +138,7 @@ public:
 	void block();
 
 private:
-#ifdef _WIN32
-	void* ev;
-#elif defined(__linux__) || defined(__FreeBSD__)
-	sem_t sem;
-#elif defined(__APPLE__)
-	mach_port_t self;
-	semaphore_t sem;
-#else
-#error Port me!
-#endif
+	std::latch latch{ 1 };
 };
 
 class Mutex {
@@ -163,7 +158,7 @@ class MutexHolder {
 	Mutex& lock;
 
 public:
-	MutexHolder(Mutex& lock) : lock(lock) { lock.enter(); }
+	explicit MutexHolder(Mutex& lock) : lock(lock) { lock.enter(); }
 	~MutexHolder() { lock.leave(); }
 };
 

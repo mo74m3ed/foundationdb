@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2018 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,11 +46,17 @@ type Snapshot struct {
 //
 // See the ReadTransactor interface for an example of using ReadTransact with
 // Transaction, Snapshot and Database objects.
-func (s Snapshot) ReadTransact(f func(ReadTransaction) (interface{}, error)) (r interface{}, e error) {
-	defer panicToError(&e)
+func (s Snapshot) ReadTransact(f func(ReadTransaction) (interface{}, error)) (r interface{}, err error) {
+	defer panicToError(&err)
 
-	r, e = f(s)
+	r, err = f(s)
 	return
+}
+
+// Cancel cancels the underlying transaction of the snapshot.
+// See Transaction.Cancel() for more information.
+func (s Snapshot) Cancel() {
+	s.transaction.cancel()
 }
 
 // Snapshot returns the receiver and allows Snapshot to satisfy the
@@ -109,8 +115,20 @@ func (s Snapshot) GetRangeSplitPoints(r ExactRange, chunkSize int64) FutureKeyAr
 	)
 }
 
+// GetRangeSplitPointsWithLimit returns at most limit interior split points, including shard boundaries.
+// The start and end keys of the given range are always included.
+func (s Snapshot) GetRangeSplitPointsWithLimit(r ExactRange, chunkSize int64, limit int) FutureKeyArray {
+	beginKey, endKey := r.FDBRangeKeys()
+	return s.getRangeSplitPointsWithLimit(
+		beginKey.FDBKey(),
+		endKey.FDBKey(),
+		chunkSize,
+		limit,
+	)
+}
+
 // Snapshot returns the receiver and allows Snapshot to satisfy the
 // ReadTransaction interface.
 func (s Snapshot) Options() TransactionOptions {
-	return s.Options()
+	return TransactionOptions{s.transaction}
 }

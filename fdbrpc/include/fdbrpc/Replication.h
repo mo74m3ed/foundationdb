@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ public:
 	    _localitygroup(source._localitygroup), _cachehits(source._cachehits), _cachemisses(source._cachemisses) {}
 	LocalitySet(LocalitySet& localityGroup)
 	  : _keymap(new StringToIntMap()), _localitygroup(&localityGroup), _cachehits(0), _cachemisses(0) {}
-	virtual ~LocalitySet() {}
+	virtual ~LocalitySet() = default;
 
 	virtual void addref() { ReferenceCounted<LocalitySet>::addref(); }
 	virtual void delref() { ReferenceCounted<LocalitySet>::delref(); }
@@ -62,6 +62,8 @@ public:
 		_keyIndexArray.clear();
 		_cacheArray.clear();
 		_keymap->clear();
+		_cachedAttribName = Optional<std::string>();
+		_cachedKey = Optional<AttribKey>();
 	}
 
 	LocalitySet& copy(LocalitySet const& source) {
@@ -112,6 +114,8 @@ public:
 
 	AttribKey getGroupKeyIndex(AttribKey indexKey) const { return _localitygroup->keyIndex(keyText(indexKey)); }
 
+	// The top-level const keeps existing auto& callers bound to the temporary.
+	// NOLINTBEGIN(readability-const-return-type)
 	Optional<AttribValue> const getValue(int recordIndex, AttribKey const& indexKey) const {
 		return getRecord(recordIndex)->getValue(getGroupKeyIndex(indexKey));
 	}
@@ -127,6 +131,7 @@ public:
 	Optional<AttribValue> const getValueViaGroupKey(LocalityEntry recordEntry, AttribKey const& indexKey) const {
 		return getRecordViaEntry(recordEntry)->getValue(indexKey);
 	}
+	// NOLINTEND(readability-const-return-type)
 
 	std::vector<LocalityEntry> const& getEntries() const { return _entryArray; }
 
@@ -174,7 +179,7 @@ public:
 		    _cacheArray.begin(), _cacheArray.end(), searchRecord, LocalityCacheRecord::compareKeyValue);
 
 		if ((itKeyValue != _cacheArray.end()) && (itKeyValue->_attribute == searchRecord._attribute)) {
-			if (g_replicationdebug > 2)
+			if (g_replicationdebug > 2) {
 				printf("Cache Hit:  (%2d) %-5s => (%4d) %-10s %3d from %3lu items\n",
 				       indexKey._id,
 				       keyText(indexKey).c_str(),
@@ -182,6 +187,7 @@ public:
 				       valueText(indexValue).c_str(),
 				       itKeyValue->_resultset->size(),
 				       _entryArray.size());
+			}
 			_cachehits++;
 			localitySet = itKeyValue->_resultset;
 		} else {
@@ -211,7 +217,7 @@ public:
 			}
 			searchRecord._resultset = localitySet;
 			_cacheArray.insert(itKeyValue, searchRecord);
-			if (g_replicationdebug > 2)
+			if (g_replicationdebug > 2) {
 				printf("Cache Miss: (%2d) %-5s => (%4d) %-10s %3d for %3lu items\n",
 				       indexKey._id,
 				       keyText(indexKey).c_str(),
@@ -219,6 +225,7 @@ public:
 				       valueText(indexValue).c_str(),
 				       localitySet->size(),
 				       _entryArray.size());
+			}
 		}
 		return localitySet;
 	}
@@ -339,7 +346,11 @@ public:
 		       _entryArray.size());
 	}
 
-	void clearCache() { _cacheArray.clear(); }
+	void clearCache() {
+		_cacheArray.clear();
+		_cachedAttribName = Optional<std::string>();
+		_cachedKey = Optional<AttribKey>();
+	}
 
 	AttribKey keyIndex(std::string const& value) const { return AttribKey(_keymap->convertString(value)); }
 	AttribKey keyIndex(char const* value) const { return keyIndex(std::string(value)); }
@@ -378,6 +389,8 @@ public:
 		_mutableEntryArray[recordIndex2] = entry;
 	}
 
+	// Count the vector objects themselves plus their separately allocated capacity.
+	// NOLINTBEGIN(bugprone-sizeof-container)
 	virtual int getMemoryUsed() const {
 		int memorySize = sizeof(_entryArray) + sizeof(LocalityEntry) * _entryArray.capacity() + sizeof(_cacheArray) +
 		                 sizeof(LocalityCacheRecord) * _cacheArray.capacity() + sizeof(_keyIndexArray) +
@@ -391,6 +404,7 @@ public:
 		}
 		return memorySize;
 	}
+	// NOLINTEND(bugprone-sizeof-container)
 
 protected:
 	LocalityEntry const& add(LocalityEntry const& entry, LocalityData const& data) {
@@ -460,14 +474,9 @@ protected:
 		Reference<LocalitySet> _resultset;
 		LocalityCacheRecord(AttribRecord const& attribute, Reference<LocalitySet> resultset)
 		  : _attribute(attribute), _resultset(resultset) {}
-		LocalityCacheRecord(LocalityCacheRecord const& source)
-		  : _attribute(source._attribute), _resultset(source._resultset) {}
-		virtual ~LocalityCacheRecord() {}
-		LocalityCacheRecord& operator=(LocalityCacheRecord const& source) {
-			_attribute = source._attribute;
-			_resultset = source._resultset;
-			return *this;
-		}
+		LocalityCacheRecord(LocalityCacheRecord const&) = default;
+		virtual ~LocalityCacheRecord() = default;
+		LocalityCacheRecord& operator=(LocalityCacheRecord const&) = default;
 		int getMemoryUsed() const { return sizeof(_attribute) + sizeof(_resultset) + _resultset->getMemoryUsed(); }
 		static bool compareKeyValue(const LocalityCacheRecord& lhs, const LocalityCacheRecord& rhs) {
 			return (lhs._attribute.first < rhs._attribute.first) ||
@@ -486,6 +495,12 @@ public:
 	Reference<StringToIntMap> _keymap;
 
 	virtual std::vector<std::vector<AttribValue>> const& getKeyValueArray() const { return _keyValueArray; }
+	// Pointer to the "root" localitySet within the policy tree.
+	LocalitySet* _localitygroup;
+	// Caches are stored on the root to be shared by derived sets.
+	// When set, avoids map lookups when there is only a single PolicyAcross rule in the policy.
+	Optional<std::string> _cachedAttribName; // e.g., "zoneid", "rack"
+	Optional<AttribKey> _cachedKey; // relies on invariant: indexKey == groupIndexKey
 
 protected:
 	virtual Reference<StringToIntMap>& getGroupValueMap() { return _localitygroup->getGroupValueMap(); }
@@ -500,16 +515,14 @@ protected:
 	std::vector<AttribKey> _keyIndexArray;
 	std::vector<LocalityCacheRecord> _cacheArray;
 
-	LocalitySet* _localitygroup;
 	long long unsigned int _cachehits;
 	long long unsigned int _cachemisses;
 };
 
 struct LocalityGroup : public LocalitySet {
 	LocalityGroup() : LocalitySet(*this), _valuemap(new StringToIntMap()) {}
-	LocalityGroup(LocalityGroup const& source)
-	  : LocalitySet(source), _recordArray(source._recordArray), _valuemap(source._valuemap) {}
-	~LocalityGroup() override {}
+	LocalityGroup(LocalityGroup const&) = default;
+	~LocalityGroup() override = default;
 
 	LocalityEntry const& add(LocalityData const& data) {
 		// _recordArray.size() is the new entry index for the new data
@@ -546,6 +559,8 @@ struct LocalityGroup : public LocalitySet {
 	// Get the locality info for debug purpose
 	std::vector<Reference<LocalityRecord>> const& getRecordArray() const override { return _recordArray; }
 
+	// Count the vector object itself plus its separately allocated contents.
+	// NOLINTBEGIN(bugprone-sizeof-container)
 	int getMemoryUsed() const override {
 		int memorySize = sizeof(_recordArray) + _keymap->getMemoryUsed();
 		for (auto& record : _recordArray) {
@@ -553,6 +568,7 @@ struct LocalityGroup : public LocalitySet {
 		}
 		return LocalitySet::getMemoryUsed() + memorySize;
 	}
+	// NOLINTEND(bugprone-sizeof-container)
 
 	// Convert locality data to sorted vector of int pairs
 	Reference<KeyValueMap> convertToAttribMap(LocalityData const& data) {
@@ -584,9 +600,9 @@ protected:
 
 template <class V>
 struct LocalityMap : public LocalityGroup {
-	LocalityMap() : LocalityGroup() {}
-	LocalityMap(LocalityMap const& source) : LocalityGroup(source), _objectArray(source._objectArray) {}
-	~LocalityMap() override {}
+	LocalityMap() = default;
+	LocalityMap(LocalityMap const&) = default;
+	~LocalityMap() override = default;
 
 	bool selectReplicas(Reference<IReplicationPolicy> const& policy,
 	                    std::vector<LocalityEntry> const& alsoServers,

@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,9 +37,9 @@ public:
 
 	IWorkloadControlIfc* getControlIfc() override;
 
-	virtual void stop() override;
+	void stop() override;
 
-	virtual void checkProgress() override;
+	void checkProgress() override;
 
 	// Workload specific setup phase.
 	virtual void setup(TTaskFct cont);
@@ -105,7 +105,7 @@ protected:
 	// In-memory store maintaining expected database state
 	std::unordered_map<std::optional<int>, KeyValueStore> stores;
 
-	ApiWorkload(const WorkloadConfig& config);
+	explicit ApiWorkload(const WorkloadConfig& config);
 
 	// Methods for generating random keys and values
 	fdb::Key randomKeyName();
@@ -131,10 +131,6 @@ protected:
 
 	std::optional<fdb::BytesRef> getTenant(std::optional<int> tenantId);
 	std::string debugTenantStr(std::optional<int> tenantId);
-
-	// Generic BlobGranules setup.
-	void setupBlobGranules(TTaskFct cont);
-	void blobbifyTenant(std::optional<int> tenantId, std::shared_ptr<std::atomic<int>> blobbifiedCount, TTaskFct cont);
 
 private:
 	void populateDataTx(TTaskFct cont, std::optional<int> tenantId);

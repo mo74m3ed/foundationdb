@@ -1,6 +1,6 @@
-#############
-Release Notes
-#############
+###################
+Release Notes - 3.0
+###################
 
 3.0.8
 =====
@@ -173,7 +173,7 @@ Python
 ------
 
 * Bindings work in Cygwin.
-* The :ref:`transactional decorator <api-python-transactional-decorator>` no longer warns of a transaction approaching the 5 second limit.
+* Some obsolete stuff deleted from this line.
 
 Ruby
 ----
@@ -198,8 +198,3 @@ Earlier release notes
 ---------------------
 * :doc:`2.0 (API Version 200) <release-notes-200>`
 * :doc:`1.0 (API Version 100) <release-notes-100>`
-* :doc:`Beta 3 (API Version 23) <release-notes-023>`
-* :doc:`Beta 2 (API Version 22) <release-notes-022>`
-* :doc:`Beta 1 (API Version 21) <release-notes-021>`
-* :doc:`Alpha 6 (API Version 16) <release-notes-016>`
-* :doc:`Alpha 5 (API Version 14) <release-notes-014>`

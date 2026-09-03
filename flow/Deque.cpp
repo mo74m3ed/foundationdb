@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -102,7 +102,7 @@ private:
 TEST_CASE("/flow/Deque/grow_exception_safety") {
 	Deque<RandomlyThrows> q;
 	for (int i = 0; i < 100; ++i) {
-		loop {
+		while (true) {
 			try {
 				q.push_back(RandomlyThrows{ i });
 				break;

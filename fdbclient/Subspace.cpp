@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2026 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@
 #include "fdbclient/Subspace.h"
 
 Subspace::Subspace(Tuple const& tuple, StringRef const& rawPrefix) {
-	StringRef packed = tuple.pack();
+	Standalone<StringRef> packed = tuple.pack();
 
 	this->rawPrefix.reserve(this->rawPrefix.arena(), rawPrefix.size() + packed.size());
 	this->rawPrefix.append(this->rawPrefix.arena(), rawPrefix.begin(), rawPrefix.size());
@@ -38,7 +38,7 @@ Subspace::Subspace(StringRef const& rawPrefix) {
 	this->rawPrefix.append(this->rawPrefix.arena(), rawPrefix.begin(), rawPrefix.size());
 }
 
-Subspace::~Subspace() {}
+Subspace::~Subspace() = default;
 
 Key Subspace::key() const {
 	return Key(StringRef(rawPrefix.begin(), rawPrefix.size()), rawPrefix.arena());
